@@ -27,10 +27,10 @@ table ip lport {
 	}
 	chain prerouting {
 		type nat hook prerouting priority -100; policy accept;
-		tcp dport @lports_tcp counter ct mark set ct mark or 0x01000000
-		dnat ip addr . port to tcp dport map @fwd_tcp
-		udp dport @lports_udp counter ct mark set ct mark or 0x01000000
-		dnat ip addr . port to udp dport map @fwd_udp
+		fib daddr type local tcp dport @lports_tcp counter ct mark set ct mark or 0x01000000
+		fib daddr type local dnat ip addr . port to tcp dport map @fwd_tcp
+		fib daddr type local udp dport @lports_udp counter ct mark set ct mark or 0x01000000
+		fib daddr type local dnat ip addr . port to udp dport map @fwd_udp
 	}
 	chain output {
 		type nat hook output priority -100; policy accept;

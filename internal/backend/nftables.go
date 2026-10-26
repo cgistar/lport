@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -75,10 +76,11 @@ func NftMapScript(rules []model.Rule) string {
 		fmt.Fprintf(&b, "\tmap fwd_%s {\n\t\ttype inet_service : ipv4_addr . inet_service\n%s\t}\n", p, elements(dnat[p]))
 		fmt.Fprintf(&b, "\tset dst_%s {\n\t\ttype ipv4_addr . inet_service\n%s\t}\n", p, elements(targets[p]))
 	}
+	// prerouting 只处理目的地址为本机的流量：本机兼作网关 / VPN / 容器宿主时，途经转发的流量不受影响
 	b.WriteString("\tchain prerouting {\n\t\ttype nat hook prerouting priority -100; policy accept;\n")
 	for _, p := range protos {
-		fmt.Fprintf(&b, "\t\t%s dport @lports_%s counter ct mark set ct mark or 0x%08x\n", p, p, ConnMark)
-		fmt.Fprintf(&b, "\t\tdnat ip addr . port to %s dport map @fwd_%s\n", p, p)
+		fmt.Fprintf(&b, "\t\tfib daddr type local %s dport @lports_%s counter ct mark set ct mark or 0x%08x\n", p, p, ConnMark)
+		fmt.Fprintf(&b, "\t\tfib daddr type local dnat ip addr . port to %s dport map @fwd_%s\n", p, p)
 	}
 	b.WriteString("\t}\n\tchain output {\n\t\ttype nat hook output priority -100; policy accept;\n")
 	for _, p := range protos {
@@ -98,7 +100,7 @@ func NftLinearScript(rules []model.Rule) string {
 	var pre, out, post strings.Builder
 	for _, f := range nftForwards(rules) {
 		dst := f.host + ":" + strconv.Itoa(f.port)
-		fmt.Fprintf(&pre, "\t\t%s dport %d counter ct mark set ct mark or 0x%08x dnat to %s\n", f.proto, f.listenPort, ConnMark, dst)
+		fmt.Fprintf(&pre, "\t\tfib daddr type local %s dport %d counter ct mark set ct mark or 0x%08x dnat to %s\n", f.proto, f.listenPort, ConnMark, dst)
 		fmt.Fprintf(&out, "\t\tfib daddr type local %s dport %d dnat to %s\n", f.proto, f.listenPort, dst)
 		fmt.Fprintf(&post, "\t\tct status dnat ip daddr %s %s dport %d masquerade\n", f.host, f.proto, f.port)
 	}
@@ -136,12 +138,16 @@ func ensureForwardAccept() error {
 	return run("", "iptables", fwdAcceptArgs("-I")...)
 }
 
-func removeForwardAccept() {
+func removeForwardAccept() error {
 	if !sysinfo.ToolInstalled("iptables") {
-		return
+		return nil
 	}
 	for i := 0; i < 10 && run("", "iptables", fwdAcceptArgs("-D")...) == nil; i++ {
 	}
+	if run("", "iptables", fwdAcceptArgs("-C")...) == nil {
+		return errors.New("删除 FORWARD 放行规则失败")
+	}
+	return nil
 }
 
 // Nftables 使用独立的 ip lport 表实现转发。
@@ -207,18 +213,14 @@ func (b *Nftables) apply(rules []model.Rule) error {
 	return nil
 }
 
-// Maintain 需与 Sync 串行调用（由 manager 保证）。
+// Maintain 定期全量重新应用：重新解析域名，并修复被外部清除（如防火墙重载、nft flush ruleset）的
+// lport 表与 FORWARD 放行规则。nft -f 在一个事务内替换整张表，不影响已建立的连接。
+// 需与 Sync 串行调用（由 manager 保证）。
 func (b *Nftables) Maintain() error {
 	b.mu.Lock()
-	k := b.kernelState
+	rules := b.rules
 	b.mu.Unlock()
-	if k.dnsChanged() {
-		return b.Sync(k.rules)
-	}
-	if len(enabled(k.rules)) > 0 {
-		return ensureForwardAccept()
-	}
-	return nil
+	return b.Sync(rules)
 }
 
 func (b *Nftables) Status() map[string]RuleStatus {
@@ -231,10 +233,13 @@ func (b *Nftables) Cleanup() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.kernelState = kernelState{}
-	removeForwardAccept()
+	fwdErr := removeForwardAccept()
 	if !sysinfo.ToolInstalled("nftables") {
-		return nil
+		return fwdErr
 	}
-	_ = run("table ip "+nftTable+" {}\ndelete table ip "+nftTable+"\n", "nft", "-f", "-")
-	return nil
+	// 先建后删，表不存在时也不会报错，因此这里的错误都是真实的删除失败
+	if err := run("table ip "+nftTable+" {}\ndelete table ip "+nftTable+"\n", "nft", "-f", "-"); err != nil {
+		return fmt.Errorf("删除 nftables 表失败: %w", err)
+	}
+	return fwdErr
 }

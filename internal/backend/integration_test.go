@@ -46,7 +46,8 @@ func output(args ...string) string {
 }
 
 // TestIntegrationBackends 在真实内核上验证各后端：外部客户端经 PREROUTING/FORWARD（FORWARD 默认 DROP，
-// 模拟 Docker）访问、本机经 OUTPUT 访问、UDP、双协议、域名目标、DNS 变化后自动更新、规则被外部清除后自动修复与清理。
+// 模拟 Docker）访问、本机经 OUTPUT 访问、UDP、双协议、域名目标、途经转发的流量不被劫持、DNS 变化后自动更新、
+// 规则（FORWARD 放行、NAT 表 / 链）被外部清除后自动修复与清理。
 func TestIntegrationBackends(t *testing.T) {
 	testnet.Setup(t)
 	testnet.ForwardDrop(t)
@@ -97,6 +98,9 @@ func TestIntegrationBackends(t *testing.T) {
 			expectReply(t, "both 规则 TCP", got, err, viaHost)
 			got, err = testnet.FromClient("tcp", 18084)
 			expectFail(t, "停用规则", got, err)
+			// 本机兼作网关时，途经本机发往其它主机同端口的流量不能被 DNAT 劫持
+			got, err = testnet.FromClientTo("tcp", testnet.TargetIP, 18080)
+			expectFail(t, "途经转发的流量", got, err)
 			if st := b.Status()["dns"]; st.State != "applied" || !strings.Contains(st.Message, testnet.TargetIP) {
 				t.Errorf("域名规则状态: %+v", st)
 			}
@@ -112,7 +116,7 @@ func TestIntegrationBackends(t *testing.T) {
 			// FORWARD 放行规则被外部清除（如防火墙重载）→ 转发失败 → Maintain 自动修复
 			switch b.(type) {
 			case *Nftables:
-				removeForwardAccept()
+				_ = removeForwardAccept()
 			case *Iptables:
 				_ = exec.Command("iptables", "-w", "-D", "FORWARD", "-j", chainFwd).Run()
 			}
@@ -123,6 +127,21 @@ func TestIntegrationBackends(t *testing.T) {
 			}
 			got, err = testnet.FromClient("tcp", 18080)
 			expectReply(t, "Maintain 修复后", got, err, viaHost)
+
+			// NAT 表 / 自有链被外部删除或清空（如 nft flush ruleset、防火墙重载）→ Maintain 全量重建
+			switch b.(type) {
+			case *Nftables:
+				_ = exec.Command("nft", "delete", "table", "ip", nftTable).Run()
+			case *Iptables:
+				_ = exec.Command("iptables", "-w", "-t", "nat", "-F", chainPre).Run()
+			}
+			got, err = testnet.FromClient("tcp", 18080)
+			expectFail(t, "NAT 规则被清除后", got, err)
+			if err := b.(Maintainer).Maintain(); err != nil {
+				t.Fatalf("Maintain: %v", err)
+			}
+			got, err = testnet.FromClient("tcp", 18080)
+			expectReply(t, "NAT 重建后", got, err, viaHost)
 
 			// 清理后不再转发，且不留残余
 			if err := b.Cleanup(); err != nil {

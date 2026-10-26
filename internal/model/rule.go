@@ -88,11 +88,16 @@ func (r *Rule) Validate(backend string) error {
 	if r.ListenPort < 1 || r.ListenPort > 65535 {
 		return fmt.Errorf("监听端口必须在 1-65535 之间")
 	}
-	host, _, err := r.TargetHostPort()
+	host, port, err := r.TargetHostPort()
 	if err != nil {
 		return err
 	}
 	ip := net.ParseIP(host)
+	if ip != nil && ip.To4() != nil {
+		// 统一为点分十进制，避免 ::ffff:1.2.3.4 这类 IPv4 映射地址原样进入 iptables / nft / socat 参数
+		host = ip.To4().String()
+		r.Target = net.JoinHostPort(host, strconv.Itoa(port))
+	}
 	if ip == nil {
 		// 域名：socat 直接使用；内核后端解析为 IPv4 后应用，并定期重新解析
 		if !hostnameRe.MatchString(host) {

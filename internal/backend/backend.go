@@ -2,9 +2,11 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"lport/internal/model"
 	"lport/internal/sysinfo"
@@ -62,14 +64,23 @@ func enabled(rules []model.Rule) []model.Rule {
 	return out
 }
 
+// cmdTimeout 防火墙命令的执行上限。iptables 的 -w 在 xtables 锁被长期占用时会无限等待
+// （CentOS 7 的 iptables 不支持 -w 秒数），而调用方持有 manager 锁，不能被无限阻塞。
+const cmdTimeout = 30 * time.Second
+
 func run(stdin string, name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("%s %s: 执行超时（%s）", name, strings.Join(args, " "), cmdTimeout)
+		}
 		return fmt.Errorf("%s %s: %v: %s", name, strings.Join(args, " "), err, strings.TrimSpace(buf.String()))
 	}
 	return nil

@@ -2,7 +2,9 @@ package backend
 
 import (
 	"flag"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,5 +68,36 @@ func TestNftMapScript(t *testing.T) {
 	// 无规则时 map/set 不能带空 elements（nft 语法错误）
 	if strings.Contains(NftMapScript(nil), "elements") {
 		t.Error("empty map should omit elements")
+	}
+}
+
+// socat 启动即失败（端口被占用）时 Sync 须返回错误且不留下进程，端口释放后可正常启动
+func TestSocatStartupFailure(t *testing.T) {
+	if _, err := exec.LookPath("socat"); err != nil {
+		t.Skip("未安装 socat")
+	}
+	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	rule := model.Rule{ID: "busy", Proto: "tcp", ListenPort: port, Target: "127.0.0.1:9", Enabled: true}
+	s := NewSocat()
+	t.Cleanup(func() { _ = s.Cleanup() })
+
+	err = s.Sync([]model.Rule{rule})
+	if err == nil || !strings.Contains(err.Error(), "socat 启动失败") {
+		t.Fatalf("Sync 应返回启动失败，实际: %v", err)
+	}
+	if st := s.Status(); len(st) != 0 {
+		t.Fatalf("失败的规则不应保留进程: %+v", st)
+	}
+
+	l.Close()
+	if err := s.Sync([]model.Rule{rule}); err != nil {
+		t.Fatalf("端口释放后 Sync 失败: %v", err)
+	}
+	if st := s.Status()["busy"]; st.State != "running" || len(st.PIDs) != 1 {
+		t.Fatalf("status=%+v", st)
 	}
 }

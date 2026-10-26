@@ -160,10 +160,15 @@ print(s.recv(256).decode().strip())
 
 // FromClient 在 client 命名空间中连接 本机:port，返回 target 的应答（"lport-it <目标地址> <源地址>"）。
 func FromClient(proto string, port int) (string, error) {
+	return FromClientTo(proto, HostClientSide, port)
+}
+
+// FromClientTo 在 client 命名空间中连接 host:port；host 不是本机地址时流量途经本机转发（本机作为网关）。
+func FromClientTo(proto, host string, port int) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "ip", "netns", "exec", ClientNS, "python3", "-c", clientScript,
-		proto, HostClientSide, fmt.Sprint(port)).CombinedOutput()
+		proto, host, fmt.Sprint(port)).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}

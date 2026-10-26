@@ -70,15 +70,15 @@ func TestResolveRulesAndDNSChange(t *testing.T) {
 	if st["1"].State != "applied" || !strings.Contains(st["1"].Message, "1.1.1.1") || st["3"].State != "error" || st["4"].State != "stopped" {
 		t.Fatalf("status=%+v", st)
 	}
-	if k.dnsChanged() {
-		t.Fatal("no change expected")
+	// 重新解析：当前 IP 仍在结果中时保持不变（避免 DNS 轮询导致规则反复变化）
+	stubDNS(t, map[string][]string{"a.example": {"3.3.3.3", "1.1.1.1"}})
+	if _, ips2, _ := resolveRules(rules, ips); ips2["1"] != "1.1.1.1" {
+		t.Fatalf("preferred IP should be kept: %v", ips2)
 	}
-	stubDNS(t, map[string][]string{"a.example": {"3.3.3.3"}})
-	if !k.dnsChanged() {
-		t.Fatal("IP change should be detected")
-	}
-	stubDNS(t, map[string][]string{"a.example": {"1.1.1.1"}, "bad.example": {"4.4.4.4"}})
-	if !k.dnsChanged() {
-		t.Fatal("recovered resolution should be detected")
+	// IP 变化后跟随更新；原先解析失败的域名恢复后重新生效
+	stubDNS(t, map[string][]string{"a.example": {"3.3.3.3"}, "bad.example": {"4.4.4.4"}})
+	out, ips2, errs2 := resolveRules(rules, ips)
+	if ips2["1"] != "3.3.3.3" || ips2["3"] != "4.4.4.4" || len(errs2) != 0 || len(out) != 3 {
+		t.Fatalf("out=%+v ips=%v errs=%v", out, ips2, errs2)
 	}
 }

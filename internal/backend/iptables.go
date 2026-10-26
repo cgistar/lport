@@ -24,11 +24,23 @@ type jump struct {
 	target       string
 }
 
+// 目的地址为本机的流量才做 DNAT：本机兼作网关 / VPN / 容器宿主时，途经本机转发到其它主机同端口的流量不受影响
+var localDst = []string{"-m", "addrtype", "--dst-type", "LOCAL"}
+
 var iptJumps = []jump{
-	{"nat", "PREROUTING", nil, chainPre},
-	{"nat", "OUTPUT", []string{"-m", "addrtype", "--dst-type", "LOCAL"}, chainOut},
+	{"nat", "PREROUTING", localDst, chainPre},
+	{"nat", "OUTPUT", localDst, chainOut},
 	{"nat", "POSTROUTING", nil, chainPost},
 	{"filter", "FORWARD", nil, chainFwd},
+}
+
+// legacyJumps 旧版本创建、已不再使用的挂接规则，清理时一并删除
+var legacyJumps = []jump{
+	{"nat", "PREROUTING", nil, chainPre},
+}
+
+var iptChains = []struct{ table, chain string }{
+	{"nat", chainPre}, {"nat", chainOut}, {"nat", chainPost}, {"filter", chainFwd},
 }
 
 func (j jump) args(op string) []string {
@@ -104,15 +116,13 @@ func ensureJumps() error {
 	return nil
 }
 
-// Maintain 需与 Sync 串行调用（由 manager 保证）。
+// Maintain 定期全量重新应用：重新解析域名，并修复被外部清除（如防火墙重载）的自有链、规则与挂接。
+// iptables-restore 按表原子替换自有链内容，不影响已建立的连接。需与 Sync 串行调用（由 manager 保证）。
 func (b *Iptables) Maintain() error {
 	b.mu.Lock()
-	k := b.kernelState
+	rules := b.rules
 	b.mu.Unlock()
-	if k.dnsChanged() {
-		return b.Sync(k.rules)
-	}
-	return ensureJumps()
+	return b.Sync(rules)
 }
 
 func (b *Iptables) Status() map[string]RuleStatus {
@@ -121,6 +131,8 @@ func (b *Iptables) Status() map[string]RuleStatus {
 	return b.status()
 }
 
+// Cleanup 删除挂接与自有链。规则或链本不存在时删除命令会失败，属于正常情况，
+// 因此最后逐项核查，仍有残留才返回错误。
 func (b *Iptables) Cleanup() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -128,15 +140,28 @@ func (b *Iptables) Cleanup() error {
 	if !sysinfo.ToolInstalled("iptables") {
 		return nil
 	}
-	for _, j := range iptJumps {
+	jumps := append(append([]jump{}, iptJumps...), legacyJumps...)
+	for _, j := range jumps {
 		for i := 0; i < 10 && run("", "iptables", j.args("-D")...) == nil; i++ {
 		}
 	}
-	for _, c := range []struct{ table, chain string }{
-		{"nat", chainPre}, {"nat", chainOut}, {"nat", chainPost}, {"filter", chainFwd},
-	} {
+	for _, c := range iptChains {
 		_ = run("", "iptables", "-w", "-t", c.table, "-F", c.chain)
 		_ = run("", "iptables", "-w", "-t", c.table, "-X", c.chain)
+	}
+	var left []string
+	for _, j := range jumps {
+		if run("", "iptables", j.args("-C")...) == nil {
+			left = append(left, j.chain+" → "+j.target)
+		}
+	}
+	for _, c := range iptChains {
+		if run("", "iptables", "-w", "-t", c.table, "-S", c.chain) == nil {
+			left = append(left, c.table+"/"+c.chain)
+		}
+	}
+	if len(left) > 0 {
+		return fmt.Errorf("清理 iptables 规则失败，仍残留: %s", strings.Join(left, ", "))
 	}
 	return nil
 }

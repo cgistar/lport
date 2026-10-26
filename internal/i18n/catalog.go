@@ -53,6 +53,12 @@ var catalog = map[string]string{
 	"网络不可达": "Network unreachable",
 
 	// backend
+	"%s %s: 执行超时（%s）":           "%s %s: timed out (%s)",
+	"清理 iptables 规则失败，仍残留: %s":  "Failed to clean up iptables rules; still present: %s",
+	"删除 FORWARD 放行规则失败":         "Failed to remove the FORWARD accept rule",
+	"删除 nftables 表失败: %w":       "Failed to delete the nftables table: %w",
+	"进程已退出":                     "Process exited",
+	"socat 启动失败（%s/%d）: %s":     "socat failed to start (%s/%d): %s",
 	"%s 未安装，请先在概览页安装":           "%s is not installed; install it from the Overview page first",
 	"添加 FORWARD 放行规则失败: %w":     "Failed to add the FORWARD accept rule: %w",
 	"解析 %s 失败: %v":              "Failed to resolve %s: %v",

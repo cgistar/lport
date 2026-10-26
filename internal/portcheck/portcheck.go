@@ -22,6 +22,13 @@ type Listener struct {
 	Process string `json:"process,omitempty"`
 }
 
+// BlocksIPv4 判断该监听是否占用 IPv4 端口。转发只监听 / DNAT IPv4，绑定在具体 IPv6 地址（如 ::1）上的
+// 监听互不影响；[::] 通常为双栈（net.ipv6.bindv6only=0），按占用处理。
+func (l Listener) BlocksIPv4() bool {
+	ip := net.ParseIP(l.Addr)
+	return ip == nil || ip.To4() != nil || ip.IsUnspecified()
+}
+
 // ParseProcNet 解析 /proc/net/{tcp,tcp6,udp,udp6} 的内容。
 // TCP 只返回 LISTEN(0A) 状态；UDP 返回全部已绑定端口。
 func ParseProcNet(r io.Reader, proto string, v6 bool) ([]Listener, error) {
@@ -173,17 +180,17 @@ func Listeners(withProcess bool) []Listener {
 	return all
 }
 
-// BindTest 尝试绑定端口，作为 /proc 解析之外的兜底检测。
+// BindTest 尝试绑定 IPv4 端口，作为 /proc 解析之外的兜底检测。
 func BindTest(proto string, port int) error {
 	addr := ":" + strconv.Itoa(port)
 	if proto == "udp" {
-		c, err := net.ListenPacket("udp", addr)
+		c, err := net.ListenPacket("udp4", addr)
 		if err != nil {
 			return err
 		}
 		return c.Close()
 	}
-	l, err := net.Listen("tcp", addr)
+	l, err := net.Listen("tcp4", addr)
 	if err != nil {
 		return err
 	}

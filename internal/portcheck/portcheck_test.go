@@ -51,3 +51,19 @@ func TestParentPID(t *testing.T) {
 		t.Skip("pid 1 has unexpected parent")
 	}
 }
+
+func TestBlocksIPv4(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"0.0.0.0":         true,
+		"127.0.0.1":       true,
+		"::":              true, // 双栈通配
+		"::ffff:10.0.0.1": true,
+		"::1":             false,
+		"fe80::1":         false,
+		"2001:db8::5":     false,
+	} {
+		if got := (Listener{Addr: addr}).BlocksIPv4(); got != want {
+			t.Errorf("%s: got %v, want %v", addr, got, want)
+		}
+	}
+}

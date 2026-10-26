@@ -151,3 +151,24 @@ rules:
 		t.Errorf("tcp+udp same port should be allowed: %v", err)
 	}
 }
+
+// ID 会写入 iptables 规则注释，含引号、换行等字符的 ID 须在加载时重新生成
+func TestInvalidRuleIDRegenerated(t *testing.T) {
+	stubEnv(t, false)
+	p := writeCfg(t, `backend: socat
+rules:
+  - {id: "x\" -j ACCEPT\n-A", proto: tcp, listen_port: 18080, target: "10.0.0.5:80"}
+  - {id: ok_id-1, proto: tcp, listen_port: 18081, target: "10.0.0.5:80"}
+`)
+	s, _, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := s.Get().Rules
+	if !idRe.MatchString(rules[0].ID) || strings.ContainsAny(rules[0].ID, "\" \n") {
+		t.Errorf("非法 ID 未重新生成: %q", rules[0].ID)
+	}
+	if rules[1].ID != "ok_id-1" {
+		t.Errorf("合法 ID 不应改变: %q", rules[1].ID)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -48,6 +49,8 @@ type LoadResult struct {
 	BackendAuto       bool   // 配置未指定 backend，已自动选择
 	Changed           bool   // 是否需要写回文件
 }
+
+var idRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 func NewID() string {
 	b := make([]byte, 4)
@@ -147,7 +150,8 @@ func (s *Store) normalize(res *LoadResult) error {
 	ids := map[string]bool{}
 	for i := range c.Rules {
 		r := &c.Rules[i]
-		if r.ID == "" || ids[r.ID] {
+		// ID 会写入 iptables 规则注释，只允许安全字符，手工编辑出的非法 ID 重新生成
+		if !idRe.MatchString(r.ID) || ids[r.ID] {
 			r.ID = NewID()
 			res.Changed = true
 		}

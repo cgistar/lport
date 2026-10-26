@@ -97,20 +97,6 @@ func resolveRules(rules []model.Rule, prev map[string]string) (out []model.Rule,
 	return out, ips, errs
 }
 
-// dnsChanged 判断重新解析后是否与当前应用的结果不同。
-func (k *kernelState) dnsChanged() bool {
-	_, ips, errs := resolveRules(k.rules, k.ips)
-	if len(errs) != len(k.errs) || len(ips) != len(k.ips) {
-		return true
-	}
-	for id, ip := range ips {
-		if k.ips[id] != ip {
-			return true
-		}
-	}
-	return false
-}
-
 func (k *kernelState) status() map[string]RuleStatus {
 	m := map[string]RuleStatus{}
 	for _, r := range k.rules {

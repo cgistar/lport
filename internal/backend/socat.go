@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os/exec"
@@ -47,9 +48,15 @@ func (t *tailBuffer) lastLine() string {
 	return lines[len(lines)-1]
 }
 
+// startupGrace 新启动的 socat 存活这么久即视为启动成功；端口被占用、权限不足等错误会在此之前退出。
+const startupGrace = 500 * time.Millisecond
+
+var errStopped = errors.New("stopped")
+
 type socatProc struct {
 	rule  model.Rule
 	proto string
+	ready chan error // 首次启动的结果，只写入一次
 
 	mu       sync.Mutex
 	pid      int
@@ -62,6 +69,13 @@ type socatProc struct {
 
 func (p *socatProc) loop() {
 	defer close(p.doneCh)
+	first := true
+	report := func(err error) {
+		if first {
+			first = false
+			p.ready <- err
+		}
+	}
 	backoff := time.Second
 	for {
 		p.mu.Lock()
@@ -73,6 +87,9 @@ func (p *socatProc) loop() {
 		cmd.Stderr = stderr
 		// 独立进程组便于整组终止；lport 意外退出时子进程随之结束
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
+		// 监听进程退出后，fork 出的连接子进程可能仍持有 stderr 管道；不设上限时 Wait 会一直等到
+		// 这些连接结束，期间监听不会被重启
+		cmd.WaitDelay = 2 * time.Second
 		started := time.Now()
 		err := cmd.Start()
 		if err == nil {
@@ -81,17 +98,29 @@ func (p *socatProc) loop() {
 			p.mu.Unlock()
 			waitCh := make(chan error, 1)
 			go func() { waitCh <- cmd.Wait() }()
-			select {
-			case err = <-waitCh:
-			case <-p.stopCh:
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+			var grace <-chan time.Time
+			if first {
+				grace = time.After(startupGrace)
+			}
+		wait:
+			for {
 				select {
-				case <-waitCh:
-				case <-time.After(3 * time.Second):
-					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-					<-waitCh
+				case err = <-waitCh:
+					break wait
+				case <-grace:
+					report(nil)
+					grace = nil
+				case <-p.stopCh:
+					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+					select {
+					case <-waitCh:
+					case <-time.After(3 * time.Second):
+						_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+						<-waitCh
+					}
+					report(errStopped)
+					return
 				}
-				return
 			}
 		}
 		msg := ""
@@ -101,12 +130,16 @@ func (p *socatProc) loop() {
 		if l := stderr.lastLine(); l != "" {
 			msg = l
 		}
+		if msg == "" {
+			msg = "进程已退出"
+		}
 		p.mu.Lock()
 		p.pid = 0
 		p.restarts++
 		p.lastErr = msg
 		p.mu.Unlock()
 		log.Printf("socat %s/%s 退出: %s", rule.Name, p.proto, msg)
+		report(errors.New(msg))
 		if time.Since(started) > 30*time.Second {
 			backoff = time.Second
 		}
@@ -164,6 +197,7 @@ func (s *Socat) Sync(rules []model.Rule) error {
 		}
 		delete(s.procs, id)
 	}
+	var started []string
 	for id, r := range want {
 		if _, ok := s.procs[id]; ok {
 			for _, p := range s.procs[id] {
@@ -175,11 +209,32 @@ func (s *Socat) Sync(rules []model.Rule) error {
 		}
 		var ps []*socatProc
 		for _, proto := range r.Protos() {
-			p := &socatProc{rule: r, proto: proto, stopCh: make(chan struct{}), doneCh: make(chan struct{})}
+			p := &socatProc{rule: r, proto: proto, ready: make(chan error, 1), stopCh: make(chan struct{}), doneCh: make(chan struct{})}
 			go p.loop()
 			ps = append(ps, p)
 		}
 		s.procs[id] = ps
+		started = append(started, id)
+	}
+	// 等待新进程的首次启动结果：启动即失败的规则整体停止并返回错误，由调用方回滚
+	var errs []string
+	for _, id := range started {
+		failed := false
+		for _, p := range s.procs[id] {
+			if err := <-p.ready; err != nil {
+				failed = true
+				errs = append(errs, fmt.Sprintf("socat 启动失败（%s/%d）: %s", p.proto, p.rule.ListenPort, err))
+			}
+		}
+		if failed {
+			for _, p := range s.procs[id] {
+				p.stop()
+			}
+			delete(s.procs, id)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "；"))
 	}
 	return nil
 }

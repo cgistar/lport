@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -171,16 +172,25 @@ func IPForwardEnabled() bool {
 	return err == nil && strings.TrimSpace(string(b)) == "1"
 }
 
-// EnableIPForward 开启并持久化 ip_forward。
+const sysctlConf = "/etc/sysctl.d/99-lport.conf"
+
+// EnableIPForward 开启并持久化 ip_forward。运行值与持久化分别处理：运行值已是 1 时也补写持久化配置；
+// 持久化失败只记录日志，不影响本次转发（lport 启动时会重新开启运行值）。
 func EnableIPForward() error {
-	if IPForwardEnabled() {
+	if !IPForwardEnabled() {
+		if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0o644); err != nil {
+			return fmt.Errorf("开启 ip_forward 失败: %w", err)
+		}
+	}
+	const want = "net.ipv4.ip_forward = 1\n"
+	if b, err := os.ReadFile(sysctlConf); err == nil && string(b) == want {
 		return nil
 	}
-	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0o644); err != nil {
-		return fmt.Errorf("开启 ip_forward 失败: %w", err)
+	if fi, err := os.Stat("/etc/sysctl.d"); err != nil || !fi.IsDir() {
+		return nil
 	}
-	if fi, err := os.Stat("/etc/sysctl.d"); err == nil && fi.IsDir() {
-		_ = os.WriteFile("/etc/sysctl.d/99-lport.conf", []byte("net.ipv4.ip_forward = 1\n"), 0o644)
+	if err := os.WriteFile(sysctlConf, []byte(want), 0o644); err != nil {
+		log.Printf("持久化 ip_forward 失败（重启后需由 lport 重新开启）: %v", err)
 	}
 	return nil
 }
