@@ -87,6 +87,7 @@ rules:
 scripts/build.sh                # 编译全部架构到 release/
 scripts/build.sh amd64 arm64    # 只编译指定架构
 scripts/deploy.sh root@host     # 编译并部署到远程服务器
+scripts/deploy.sh -p 2222 root@host  # 指定 SSH 端口
 ```
 
 推送 `v*` tag（如 `git tag v1.0.0 && git push origin v1.0.0`）会由 GitHub Actions 自动测试、编译并发布 Release。

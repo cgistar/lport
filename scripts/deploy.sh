@@ -3,6 +3,7 @@
 #
 # 用法:
 #   scripts/deploy.sh root@host                         # 部署，沿用远端已有配置
+#   scripts/deploy.sh -p 2222 root@host                 # 指定 SSH 端口
 #   scripts/deploy.sh root@host --listen 127.0.0.1:8080 # 其余参数传给 lport install
 #   scripts/deploy.sh root@host -y --backend nftables   # 非交互安装
 #   SKIP_WEB=1 scripts/deploy.sh root@host              # 跳过前端构建
@@ -13,15 +14,23 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+usage() { sed -n '2,13p' "$0"; exit 2; }
+PORT="${SSH_PORT:-}"
+if [[ "${1:-}" == "-p" ]]; then
+  [[ -n "${2:-}" ]] || usage
+  PORT="$2"; shift 2
+fi
 HOST="${1:-}"
-[[ -z "$HOST" || "$HOST" == -* ]] && { sed -n '2,12p' "$0"; exit 2; }
+[[ -z "$HOST" || "$HOST" == -* ]] && usage
 shift
 INSTALL_ARGS=("$@")
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
 
-SSH=(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST")
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10)
+[[ -n "$PORT" ]] && SSH_OPTS+=(-o "Port=$PORT")
+SSH=(ssh "${SSH_OPTS[@]}" "$HOST")
 
 log "检测 $HOST 的架构"
 machine="$("${SSH[@]}" uname -m)" || die "无法连接 $HOST"
@@ -45,12 +54,12 @@ tarball="$ROOT/release/$pkg.tar.gz"
 log "上传 $pkg.tar.gz"
 remote_dir="/tmp/lport-deploy"
 "${SSH[@]}" "rm -rf $remote_dir && mkdir -p $remote_dir"
-scp -q -o BatchMode=yes "$tarball" "$HOST:$remote_dir/"
+scp -q "${SSH_OPTS[@]}" "$tarball" "$HOST:$remote_dir/"
 
 log "安装 / 升级服务"
 # 本地是终端时为远端分配 tty，使 lport install 可以交互提问
 TTY=()
 [[ -t 0 && -t 1 ]] && TTY=(-t)
 # shellcheck disable=SC2029
-ssh "${TTY[@]}" -o BatchMode=yes -o ConnectTimeout=10 "$HOST" "set -e; cd $remote_dir && tar -xzf $pkg.tar.gz && ./$pkg/lport install ${INSTALL_ARGS[*]:-} && rm -rf $remote_dir && lport version && lport detect"
+ssh "${TTY[@]}" "${SSH_OPTS[@]}" "$HOST" "set -e; cd $remote_dir && tar -xzf $pkg.tar.gz && ./$pkg/lport install ${INSTALL_ARGS[*]:-} && rm -rf $remote_dir && lport version && lport detect"
 log "部署完成"
