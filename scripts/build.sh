@@ -44,12 +44,26 @@ for a in "${ARCHES[@]}"; do goenv "$a" >/dev/null; done
 if [[ "${SKIP_WEB:-0}" != "1" ]]; then
   command -v npm >/dev/null || die "未找到 npm（或设置 SKIP_WEB=1 复用已有 web/dist）"
   log "构建前端"
-  (cd web && { [[ -d node_modules ]] || npm ci; } && npm run build)
+  # node_modules 含平台相关的原生二进制（typescript、esbuild 等）。共享目录被多台机器使用时，
+  # 平台变化或 lockfile 更新后需要重新安装
+  platform="$(uname -s)-$(uname -m)"
+  stamp=web/node_modules/.lport-platform
+  if [[ "$(cat "$stamp" 2>/dev/null)" != "$platform" || web/package-lock.json -nt "$stamp" ]]; then
+    log "安装前端依赖（${platform}）"
+    (cd web && npm ci)
+    echo "$platform" > "$stamp"
+  fi
+  (cd web && npm run build)
 fi
 [[ -f web/dist/index.html ]] || die "web/dist 不存在，请先构建前端"
 
-log "运行测试"
-go test ./... >/dev/null
+# 部分代码仅能在 Linux 上编译（如 SysProcAttr.Pdeathsig），其他系统上只做交叉编译
+if [[ "$(uname -s)" == Linux ]]; then
+  log "运行测试"
+  go test ./... >/dev/null
+else
+  log "非 Linux 主机，跳过测试"
+fi
 
 mkdir -p "$OUT"
 for a in "${ARCHES[@]}"; do
@@ -65,6 +79,7 @@ for a in "${ARCHES[@]}"; do
   rm -rf "$stage"
 done
 
-(cd "$OUT" && sha256sum lport-"${VERSION}"-linux-*.tar.gz > sha256sums.txt)
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
+(cd "$OUT" && sha256 lport-"${VERSION}"-linux-*.tar.gz > sha256sums.txt)
 log "完成，产物位于 $OUT:"
 ls -lh "$OUT"
