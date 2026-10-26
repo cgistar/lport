@@ -28,7 +28,8 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          # 发布用最新稳定版编译（含安全修复）；go.mod 中的版本只是最低要求，由 CI 验证
+          go-version: stable
 
       - uses: actions/setup-node@v5
         with:
