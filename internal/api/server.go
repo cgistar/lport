@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"lport/internal/auth"
@@ -48,6 +49,20 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/", s.requireAuth(authed))
 
 	mux.Handle("/", s.spa())
+	return mux
+}
+
+// SocketPath 返回本机控制套接字路径，放在配置目录下（0700），仅 root 可访问。
+func SocketPath(configPath string) string {
+	return filepath.Join(filepath.Dir(configPath), "lport.sock")
+}
+
+// LocalHandler 供控制套接字使用的规则接口（lport add/remove/list），由文件权限保证访问控制，无需登录。
+func (s *Server) LocalHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /rules", s.listRules)
+	mux.HandleFunc("POST /rules", s.createRule)
+	mux.HandleFunc("DELETE /rules/{id}", s.deleteRule)
 	return mux
 }
 

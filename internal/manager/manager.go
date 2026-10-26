@@ -46,6 +46,20 @@ func New(store *config.Store) *Manager {
 	return &Manager{store: store}
 }
 
+// NewOffline 创建只修改配置、不应用转发的 Manager，用于服务未运行时在命令行增删规则，
+// 校验逻辑与运行时一致，规则在服务启动后生效。
+func NewOffline(store *config.Store) *Manager {
+	return &Manager{store: store, backend: offlineBackend{}}
+}
+
+type offlineBackend struct{}
+
+func (offlineBackend) Name() string                          { return "offline" }
+func (offlineBackend) Available() error                      { return nil }
+func (offlineBackend) Sync([]model.Rule) error               { return nil }
+func (offlineBackend) Status() map[string]backend.RuleStatus { return nil }
+func (offlineBackend) Cleanup() error                        { return nil }
+
 // Start 清理残留并按配置应用规则。后端不可用时记录错误但不阻止启动，便于在界面中安装依赖。
 func (m *Manager) Start() {
 	m.mu.Lock()

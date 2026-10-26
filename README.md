@@ -47,11 +47,16 @@ cd lport-*-linux-amd64
 | `lport install` | 安装或升级（已安装时直接升级并重启服务） |
 | `lport uninstall [--purge]` | 卸载服务，`--purge` 同时删除配置 |
 | `lport passwd [新密码]` | 重置管理员密码（不填则随机生成） |
+| `lport list` | 列出转发规则及运行状态 |
+| `lport add [--proto tcp\|udp\|both] [--name 名称] 端口 目标:端口` | 添加转发规则，如 `lport add 8443 10.0.0.2:443` |
+| `lport remove 规则名\|ID\|端口 ...` | 删除转发规则 |
 | `lport probe [规则名\|端口 ...]` | 命令行检测规则连通性，有失败时退出码为 1 |
 | `lport detect` | 检测系统环境与依赖工具 |
 | `lport serve` | 前台运行（调试用） |
 
 所有命令都支持 `--config` 指定配置文件，默认 `/etc/lport/config.yaml`。
+
+`add` / `remove` 与 Web 界面使用相同的校验（端口冲突、目标地址等）：服务运行中时立即生效，否则写入配置文件，服务启动后生效。
 
 ### 配置文件
 

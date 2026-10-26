@@ -143,6 +143,17 @@ func Installed() bool {
 	return false
 }
 
+// Running 判断已安装的服务是否正在运行。
+func Running() bool {
+	switch InitSystem() {
+	case "systemd":
+		return exec.Command("systemctl", "is-active", "--quiet", "lport").Run() == nil
+	case "openrc":
+		return exec.Command("rc-service", "lport", "status").Run() == nil
+	}
+	return false
+}
+
 func Stop() error {
 	switch InitSystem() {
 	case "systemd":

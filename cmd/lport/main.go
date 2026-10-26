@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,6 +34,10 @@ const usage = `lport - 端口转发管理工具 (%s)
                                                     安装程序与系统服务（交互式；-y 或无终端时使用默认值）
   lport uninstall [--config PATH] [--purge]         卸载系统服务，--purge 同时删除配置
   lport passwd    [--config PATH] [新密码]          重置管理员密码（不填则随机生成）
+  lport list      [--config PATH]                   列出转发规则
+  lport add       [--config PATH] [--proto tcp|udp|both] [--name NAME] [--remark TEXT] [--disabled]
+                  监听端口 目标地址:端口             添加转发规则（服务运行中时立即生效）
+  lport remove    [--config PATH] 规则名|ID|端口 ...  删除转发规则
   lport probe     [--config PATH] [规则名|ID|端口 ...] 检测规则连通性（本机经转发 / 直连目标）
   lport detect                                      检测系统环境与依赖工具
   lport version
@@ -57,6 +62,12 @@ func main() {
 		err = cmdUninstall(args)
 	case "passwd":
 		err = cmdPasswd(args)
+	case "list", "ls":
+		err = cmdList(args)
+	case "add":
+		err = cmdAdd(args)
+	case "remove", "rm":
+		err = cmdRemove(args)
 	case "probe":
 		err = cmdProbe(args)
 	case "detect":
@@ -116,10 +127,19 @@ func cmdServe(args []string) error {
 	mgr.Start()
 	defer mgr.Stop()
 
+	apiSrv := api.New(store, mgr, auth.New(store), web.Dist())
 	srv := &http.Server{
 		Addr:              store.Get().Listen,
-		Handler:           api.New(store, mgr, auth.New(store), web.Dist()).Handler(),
+		Handler:           apiSrv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+	ctl, err := listenCtl(api.SocketPath(store.Path()))
+	if err != nil {
+		log.Printf("警告: 控制套接字启动失败，lport add/remove 将无法连接运行中的服务: %v", err)
+	} else {
+		ctlSrv := &http.Server{Handler: apiSrv.LocalHandler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() { _ = ctlSrv.Serve(ctl) }()
+		defer ctlSrv.Close()
 	}
 	errCh := make(chan error, 1)
 	go func() {
@@ -138,6 +158,23 @@ func cmdServe(args []string) error {
 	defer cancel()
 	_ = srv.Shutdown(ctx)
 	return nil
+}
+
+// listenCtl 监听控制套接字，先移除上次异常退出遗留的文件；套接字关闭时文件会被自动删除。
+func listenCtl(path string) (net.Listener, error) {
+	if len(path) > 100 {
+		return nil, fmt.Errorf("路径过长（Unix 套接字路径上限约 100 字节）: %s", path)
+	}
+	_ = os.Remove(path)
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		l.Close()
+		return nil, err
+	}
+	return l, nil
 }
 
 func cmdInstall(args []string) error {
