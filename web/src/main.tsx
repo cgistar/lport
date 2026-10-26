@@ -1,16 +1,18 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { App as AntApp, ConfigProvider } from 'antd'
-import zhCN from 'antd/locale/zh_CN'
+import { Toaster } from '@/components/ui/sonner'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import App from './App'
+import { I18nProvider } from './i18n'
 import './style.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ConfigProvider locale={zhCN} theme={{ token: { borderRadius: 6 } }}>
-      <AntApp>
+    <I18nProvider>
+      <TooltipProvider delayDuration={200}>
         <App />
-      </AntApp>
-    </ConfigProvider>
+        <Toaster position="top-center" richColors />
+      </TooltipProvider>
+    </I18nProvider>
   </StrictMode>,
 )

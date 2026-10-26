@@ -1,133 +1,208 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, App, Button, Card, Col, Form, Input, Radio, Row, Space, Table, Tag, Typography } from 'antd'
-import { ReloadOutlined } from '@ant-design/icons'
-import { api, backendLabels, toolForBackend, type Backend, type Listener, type Settings as S, type Tool } from '../api'
-
-const backendDesc: Record<Backend, string> = {
-  socat: '每条规则一个 socat 进程，支持转发到域名和本机回环地址，配置简单；性能低于内核转发。',
-  iptables: '内核 DNAT，性能高；目标可为 IP 或域名（每 60 秒重新解析）。仅操作 LPORT_* 自有链。',
-  nftables: '内核 DNAT，性能最好；使用 map 哈希查找，规则数量多时匹配开销不变（老版本自动降级为逐条匹配）。目标可为 IP 或域名（每 60 秒重新解析），仅操作独立的 ip lport 表。',
-}
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { RefreshCw, Search } from 'lucide-react'
+import { toast } from 'sonner'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import Notice from '@/components/notice'
+import Pager, { clampPage } from '@/components/pager'
+import { cn } from '@/lib/utils'
+import { api, toolForBackend, type Backend, type Listener, type Settings as S, type Tool } from '../api'
+import { useI18n } from '../i18n'
 
 function BackendCard() {
-  const { message, modal } = App.useApp()
+  const { t } = useI18n()
   const [settings, setSettings] = useState<S | null>(null)
   const [tools, setTools] = useState<Tool[]>([])
+  const [pending, setPending] = useState<Backend | null>(null)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    api.settings().then(setSettings).catch((e) => message.error(e.message))
+    api.settings().then(setSettings).catch((e) => toast.error(e.message))
     api.system().then((s) => setTools(s.info.tools)).catch(() => {})
-  }, [message])
+  }, [])
 
-  const installed = (b: Backend) => tools.find((t) => t.name === toolForBackend[b])?.installed ?? false
+  const installed = (b: Backend) => tools.find((tool) => tool.name === toolForBackend[b])?.installed ?? false
 
-  const change = (b: Backend) => {
-    modal.confirm({
-      title: `切换到 ${b}？`,
-      content: '将先清除当前后端的所有转发，再用新后端重新应用全部规则；失败时自动回滚。',
-      onOk: async () => {
-        setSaving(true)
-        try {
-          setSettings(await api.setBackend(b))
-          message.success(`已切换到 ${b}`)
-        } catch (e) {
-          message.error((e as Error).message)
-        } finally {
-          setSaving(false)
-        }
-      },
-    })
-  }
-
-  return (
-    <Card title="转发后端" loading={!settings}>
-      {settings && (
-        <Radio.Group value={settings.backend} disabled={saving} onChange={(e) => change(e.target.value)} style={{ width: '100%' }}>
-          <Space orientation="vertical" style={{ width: '100%' }}>
-            {settings.backends.map((b) => (
-              <Radio key={b} value={b} disabled={!installed(b)}>
-                <b>{backendLabels[b]}</b> {b === 'nftables' && <Tag color="green">推荐</Tag>}
-                {!installed(b) && <Tag color="red">未安装</Tag>}
-                <div>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {backendDesc[b]}
-                  </Typography.Text>
-                </div>
-              </Radio>
-            ))}
-          </Space>
-        </Radio.Group>
-      )}
-    </Card>
-  )
-}
-
-function PasswordCard() {
-  const { message } = App.useApp()
-  const [form] = Form.useForm()
-  const [saving, setSaving] = useState(false)
-
-  const submit = async (v: { old_password: string; new_password: string }) => {
+  const confirm = async () => {
+    if (!pending) return
+    const b = pending
+    setPending(null)
     setSaving(true)
     try {
-      await api.changePassword(v.old_password, v.new_password)
-      message.success('密码已修改，请重新登录')
-      form.resetFields()
-      setTimeout(() => window.dispatchEvent(new Event('lport:unauthorized')), 800)
+      setSettings(await api.setBackend(b))
+      toast.success(t('settings.switched', { backend: b }))
     } catch (e) {
-      message.error((e as Error).message)
+      toast.error((e as Error).message)
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <Card title="修改密码">
-      <Form form={form} layout="vertical" onFinish={submit}>
-        <Form.Item name="old_password" label="原密码" rules={[{ required: true }]}>
-          <Input.Password autoComplete="current-password" />
-        </Form.Item>
-        <Form.Item name="new_password" label="新密码" rules={[{ required: true }, { min: 6, message: '至少 6 位' }]}>
-          <Input.Password autoComplete="new-password" />
-        </Form.Item>
-        <Form.Item
-          name="confirm"
-          label="确认新密码"
-          dependencies={['new_password']}
-          rules={[
-            { required: true },
-            ({ getFieldValue }) => ({
-              validator: (_, v) => (v === getFieldValue('new_password') ? Promise.resolve() : Promise.reject(new Error('两次输入不一致'))),
-            }),
-          ]}
-        >
-          <Input.Password autoComplete="new-password" />
-        </Form.Item>
-        <Button type="primary" htmlType="submit" loading={saving}>
-          修改密码
-        </Button>
-      </Form>
+    <Card className="h-full">
+      <CardHeader>
+        <CardTitle>{t('settings.backend')}</CardTitle>
+        {saving && (
+          <CardAction>
+            <Spinner />
+          </CardAction>
+        )}
+      </CardHeader>
+      <CardContent>
+        {!settings ? (
+          <Skeleton className="h-48" />
+        ) : (
+          <RadioGroup value={settings.backend} disabled={saving} onValueChange={(b) => setPending(b as Backend)} className="gap-2">
+            {settings.backends.map((b) => (
+              <Label
+                key={b}
+                htmlFor={`backend-${b}`}
+                className={cn(
+                  'flex items-start gap-3 rounded-lg border p-3 font-normal transition-colors has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-muted/50',
+                  installed(b) ? 'cursor-pointer hover:bg-muted/30' : 'opacity-60',
+                )}
+              >
+                <RadioGroupItem id={`backend-${b}`} value={b} disabled={!installed(b)} className="mt-0.5" />
+                <div className="flex flex-col gap-1">
+                  <div className="flex flex-wrap items-center gap-2 font-medium">
+                    {t(`backend.${b}`)}
+                    {b === 'nftables' && <Badge className="bg-emerald-50 text-emerald-700">{t('settings.recommended')}</Badge>}
+                    {!installed(b) && <Badge variant="destructive">{t('common.notInstalled')}</Badge>}
+                  </div>
+                  <p className="text-xs leading-relaxed text-muted-foreground">{t(`settings.desc.${b}`)}</p>
+                </div>
+              </Label>
+            ))}
+          </RadioGroup>
+        )}
+      </CardContent>
+      <AlertDialog open={pending !== null} onOpenChange={(o) => !o && setPending(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('settings.switchTitle', { backend: pending ?? '' })}</AlertDialogTitle>
+            <AlertDialogDescription>{t('settings.switchContent')}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction onClick={confirm}>{t('common.confirm')}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   )
 }
 
+function PasswordCard() {
+  const { t } = useI18n()
+  const [v, setV] = useState({ old: '', next: '', confirm: '' })
+  const [submitted, setSubmitted] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const errors = {
+    old: !v.old ? t('common.required') : '',
+    next: !v.next ? t('common.required') : v.next.length < 6 ? t('settings.minLength') : '',
+    confirm: !v.confirm ? t('common.required') : v.confirm !== v.next ? t('settings.mismatch') : '',
+  }
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setSubmitted(true)
+    if (errors.old || errors.next || errors.confirm) return
+    setSaving(true)
+    try {
+      await api.changePassword(v.old, v.next)
+      toast.success(t('settings.passwordChanged'))
+      setV({ old: '', next: '', confirm: '' })
+      setSubmitted(false)
+      setTimeout(() => window.dispatchEvent(new Event('lport:unauthorized')), 800)
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const fields = [
+    { key: 'old', label: t('settings.oldPassword'), autoComplete: 'current-password' },
+    { key: 'next', label: t('settings.newPassword'), autoComplete: 'new-password' },
+    { key: 'confirm', label: t('settings.confirmPassword'), autoComplete: 'new-password' },
+  ] as const
+
+  return (
+    <Card className="h-full">
+      <CardHeader>
+        <CardTitle>{t('settings.password')}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} noValidate>
+          <FieldGroup>
+            {fields.map(({ key, label, autoComplete }) => {
+              const invalid = submitted && !!errors[key]
+              return (
+                <Field key={key} data-invalid={invalid}>
+                  <FieldLabel htmlFor={`pw-${key}`}>{label}</FieldLabel>
+                  <Input
+                    id={`pw-${key}`}
+                    type="password"
+                    autoComplete={autoComplete}
+                    value={v[key]}
+                    aria-invalid={invalid}
+                    onChange={(e) => setV((s) => ({ ...s, [key]: e.target.value }))}
+                  />
+                  {invalid && <FieldError>{errors[key]}</FieldError>}
+                </Field>
+              )
+            })}
+            <div>
+              <Button type="submit" disabled={saving}>
+                {saving && <Spinner />}
+                {t('settings.password')}
+              </Button>
+            </div>
+          </FieldGroup>
+        </form>
+      </CardContent>
+    </Card>
+  )
+}
+
+const pageSize = 15
+
 function ListeningCard() {
-  const { message } = App.useApp()
+  const { t } = useI18n()
   const [data, setData] = useState<Listener[]>([])
   const [loading, setLoading] = useState(false)
   const [q, setQ] = useState('')
+  const [page, setPage] = useState(1)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       setData(await api.listening())
     } catch (e) {
-      message.error((e as Error).message)
+      toast.error((e as Error).message)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [])
 
   useEffect(() => {
     load()
@@ -137,52 +212,69 @@ function ListeningCard() {
     () => (q ? data.filter((l) => String(l.port).includes(q) || (l.process ?? '').includes(q)) : data),
     [data, q],
   )
+  const current = clampPage(page, pageSize, filtered.length)
 
   return (
-    <Card
-      title="系统已占用端口"
-      extra={
-        <Space>
-          <Input.Search placeholder="端口 / 进程" allowClear onChange={(e) => setQ(e.target.value)} style={{ width: 180 }} />
-          <Button icon={<ReloadOutlined />} onClick={load} loading={loading} />
-        </Space>
-      }
-    >
-      <Table<Listener>
-        rowKey={(l) => `${l.proto}-${l.addr}-${l.port}-${l.pid ?? ''}`}
-        size="small"
-        loading={loading}
-        dataSource={filtered}
-        pagination={{ pageSize: 15, hideOnSinglePage: true, showSizeChanger: false }}
-        scroll={{ x: true }}
-        columns={[
-          { title: '协议', dataIndex: 'proto', width: 80, render: (p: string) => <Tag>{p.toUpperCase()}</Tag> },
-          { title: '端口', dataIndex: 'port', width: 90, render: (p: number) => <span className="mono">{p}</span> },
-          { title: '地址', dataIndex: 'addr', render: (a: string) => <span className="mono">{a}</span> },
-          { title: '进程', render: (_, l) => (l.process ? `${l.process} (${l.pid})` : '-') },
-        ]}
-      />
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('settings.listening')}</CardTitle>
+        <CardAction className="flex gap-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder={t('settings.search')}
+              className="w-40 pl-8 sm:w-52"
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value)
+                setPage(1)
+              }}
+            />
+          </div>
+          <Button variant="outline" size="icon" aria-label={t('common.refresh')} disabled={loading} onClick={load}>
+            {loading ? <Spinner /> : <RefreshCw />}
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-24">{t('settings.proto')}</TableHead>
+              <TableHead className="w-24">{t('settings.port')}</TableHead>
+              <TableHead>{t('settings.address')}</TableHead>
+              <TableHead>{t('settings.process')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filtered.slice((current - 1) * pageSize, current * pageSize).map((l) => (
+              <TableRow key={`${l.proto}-${l.addr}-${l.port}-${l.pid ?? ''}`}>
+                <TableCell>
+                  <Badge variant="secondary">{l.proto.toUpperCase()}</Badge>
+                </TableCell>
+                <TableCell className="font-mono">{l.port}</TableCell>
+                <TableCell className="font-mono">{l.addr}</TableCell>
+                <TableCell>{l.process ? `${l.process} (${l.pid})` : '-'}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        <Pager page={current} pageSize={pageSize} total={filtered.length} onChange={setPage} />
+      </CardContent>
     </Card>
   )
 }
 
 export default function Settings() {
+  const { t } = useI18n()
   return (
-    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-      <Alert
-        type="info"
-        showIcon
-        title="所有配置保存在 YAML 配置文件中，也可手动编辑后重启服务生效（界面保存会覆盖文件中的注释）。"
-      />
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={14}>
-          <BackendCard />
-        </Col>
-        <Col xs={24} lg={10}>
-          <PasswordCard />
-        </Col>
-      </Row>
+    <div className="flex flex-col gap-4">
+      <Notice type="info" title={t('settings.configNote')} />
+      <div className="grid gap-4 lg:grid-cols-[7fr_5fr]">
+        <BackendCard />
+        <PasswordCard />
+      </div>
       <ListeningCard />
-    </Space>
+    </div>
   )
 }

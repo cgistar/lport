@@ -1,6 +1,10 @@
-import { Badge, Button, Space, Tooltip } from 'antd'
-import { ApiOutlined } from '@ant-design/icons'
+import type { ReactNode } from 'react'
+import { Activity } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { cn } from '@/lib/utils'
 import type { ProbeItem, ProbeResult } from '../api'
+import { tr, useI18n } from '../i18n'
 
 export interface ProbeState {
   loading: boolean
@@ -10,11 +14,12 @@ export interface ProbeState {
 
 type Agg = ProbeItem['state']
 
-const badgeStatus: Record<Agg, 'success' | 'error' | 'warning' | 'default'> = {
-  ok: 'success',
-  fail: 'error',
-  unknown: 'warning',
-  skipped: 'default',
+const dotColor: Record<Agg | 'processing', string> = {
+  ok: 'bg-emerald-500',
+  fail: 'bg-red-500',
+  unknown: 'bg-amber-500',
+  skipped: 'bg-neutral-300',
+  processing: 'bg-sky-500 animate-pulse',
 }
 
 function aggregate(items: ProbeItem[]): Agg {
@@ -26,59 +31,71 @@ function aggregate(items: ProbeItem[]): Agg {
 
 function details(items: ProbeItem[], hint?: string) {
   return (
-    <div>
+    <div className="flex max-w-sm flex-col gap-1">
       {items.map((i) => (
         <div key={i.proto}>
-          {i.proto.toUpperCase()} <span className="mono">{i.addr}</span>：{i.message}
+          {i.proto.toUpperCase()} <span className="font-mono">{i.addr}</span>
+          {tr('common.colon')}
+          {i.message}
           {i.state !== 'skipped' && i.state !== 'unknown' && ` · ${i.latency_ms}ms`}
         </div>
       ))}
-      {hint && <div style={{ marginTop: 4, opacity: 0.85 }}>{hint}</div>}
-      <div style={{ marginTop: 4, opacity: 0.65 }}>点击重新检测</div>
+      {hint && <div className="opacity-85">{hint}</div>}
+      <div className="opacity-65">{tr('probe.retest')}</div>
     </div>
   )
 }
 
-function Dot({ label, status, tip, onClick }: { label: string; status: Agg | 'processing'; tip: React.ReactNode; onClick: () => void }) {
+function Dot({ label, status, tip, onClick }: { label: string; status: Agg | 'processing'; tip: ReactNode; onClick?: () => void }) {
   return (
-    <Tooltip title={tip}>
-      <Button type="text" size="small" onClick={onClick} style={{ paddingInline: 4 }}>
-        <Badge status={status === 'processing' ? 'processing' : badgeStatus[status]} text={label} />
-      </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="xs" onClick={onClick} className="font-normal">
+          <span className={cn('size-1.5 rounded-full', dotColor[status])} />
+          {label}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{tip}</TooltipContent>
     </Tooltip>
   )
 }
 
 /** 规则连通性检测：本机（经转发路径）与目标（直连）两个状态点。 */
 export default function ProbeCell({ state, onProbe }: { state?: ProbeState; onProbe: () => void }) {
+  const { t } = useI18n()
   if (!state || (!state.result && !state.loading && !state.error)) {
     return (
-      <Tooltip title="检测本机监听端口与目标端口的连通性">
-        <Button type="text" size="small" icon={<ApiOutlined />} onClick={onProbe} />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon-xs" aria-label={t('probe.tooltip')} onClick={onProbe}>
+            <Activity />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{t('probe.tooltip')}</TooltipContent>
       </Tooltip>
     )
   }
   if (state.error) {
-    return <Dot label="检测失败" status="fail" tip={`${state.error}，点击重试`} onClick={onProbe} />
+    return <Dot label={t('probe.failed')} status="fail" tip={t('probe.failedTip', { error: state.error })} onClick={onProbe} />
   }
   if (state.loading || !state.result) {
     return (
-      <Space size={0}>
-        <Dot label="本机" status="processing" tip="检测中..." onClick={() => {}} />
-        <Dot label="目标" status="processing" tip="检测中..." onClick={() => {}} />
-      </Space>
+      <div className="flex">
+        <Dot label={t('probe.local')} status="processing" tip={t('probe.checking')} />
+        <Dot label={t('probe.target')} status="processing" tip={t('probe.checking')} />
+      </div>
     )
   }
   const local = aggregate(state.result.local)
   const target = aggregate(state.result.target)
   let localHint: string | undefined
-  if (local === 'fail' && target === 'ok') localHint = '目标可达但经本机转发失败：请检查规则状态、转发后端与防火墙。'
-  if (local === 'ok') localHint = '本机检测不经过 FORWARD 链；若外部仍无法访问，请检查云安全组与 FORWARD 防火墙规则。'
-  const targetHint = target === 'fail' ? '本机无法直连目标：目标服务未启动、地址错误或目标防火墙拦截。' : undefined
+  if (local === 'fail' && target === 'ok') localHint = t('probe.hintForwardFail')
+  if (local === 'ok') localHint = t('probe.hintLocalOk')
+  const targetHint = target === 'fail' ? t('probe.hintTargetFail') : undefined
   return (
-    <Space size={0}>
-      <Dot label="本机" status={local} tip={details(state.result.local, localHint)} onClick={onProbe} />
-      <Dot label="目标" status={target} tip={details(state.result.target, targetHint)} onClick={onProbe} />
-    </Space>
+    <div className="flex">
+      <Dot label={t('probe.local')} status={local} tip={details(state.result.local, localHint)} onClick={onProbe} />
+      <Dot label={t('probe.target')} status={target} tip={details(state.result.target, targetHint)} onClick={onProbe} />
+    </div>
   )
 }

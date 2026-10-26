@@ -4,8 +4,6 @@ English | [简体中文](README.zh-CN.md)
 
 Port forwarding manager for Linux: forward local TCP/UDP ports to any `IP/domain:port` through a web UI or the command line. Ships as a single binary with no other dependencies.
 
-> The web UI and command output are currently in Chinese only.
-
 ## Features
 
 - Runs on Alpine / Debian / Ubuntu / CentOS / Rocky / Alma / Fedora, amd64 / arm64 / armv7 / armv6 / 386
@@ -14,6 +12,7 @@ Port forwarding manager for Linux: forward local TCP/UDP ports to any `IP/domain
 - Port conflict checks against other rules, the admin panel, and ports already in use on the system (with the owning process shown)
 - Connectivity probe: check in one click whether the local port and the target are reachable, to pinpoint failures quickly
 - Works in environments such as Docker hosts that set the FORWARD chain's default policy to DROP
+- Web UI in English and Chinese (switch from the top bar); command-line output is currently in Chinese only
 - Configuration is a single, hand-editable YAML file; registers as a systemd / OpenRC service and restores rules on boot
 
 ## Installation

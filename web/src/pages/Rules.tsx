@@ -1,177 +1,229 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { Activity, ArrowDown, ArrowUp, ArrowUpDown, Filter, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 import {
-  Alert,
-  App,
-  Button,
-  Card,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Popconfirm,
-  Radio,
-  Space,
-  Switch,
-  Table,
-  Tag,
-  Tooltip,
-  Typography,
-} from 'antd'
-import { ApiOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
-import { api, type Conflict, type Proto, type Rule } from '../api'
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
+import { Spinner } from '@/components/ui/spinner'
+import { Switch } from '@/components/ui/switch'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Textarea } from '@/components/ui/textarea'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import Notice from '@/components/notice'
+import Pager, { clampPage } from '@/components/pager'
+import { cn } from '@/lib/utils'
+import { api, type Conflict, type Proto, type Rule, type RuleStatus } from '../api'
+import { useI18n } from '../i18n'
 import ProbeCell, { type ProbeState } from './ProbeCell'
 
-const stateTag: Record<string, { color: string; text: string }> = {
-  running: { color: 'green', text: '运行中' },
-  applied: { color: 'green', text: '已生效' },
-  stopped: { color: 'default', text: '已停用' },
-  error: { color: 'red', text: '异常' },
+const stateBadge: Record<RuleStatus['state'], string> = {
+  running: 'bg-emerald-50 text-emerald-700',
+  applied: 'bg-emerald-50 text-emerald-700',
+  stopped: 'bg-muted text-muted-foreground',
+  error: 'bg-red-50 text-red-700',
 }
+
+const protoBadge: Record<Proto, string> = {
+  tcp: 'bg-sky-50 text-sky-700',
+  udp: 'bg-violet-50 text-violet-700',
+  both: 'bg-teal-50 text-teal-700',
+}
+
+const protoLabel: Record<Proto, string> = { tcp: 'TCP', udp: 'UDP', both: 'TCP+UDP' }
 
 const targetPattern = /^[A-Za-z0-9.-]+:\d{1,5}$/
 
+const pageSize = 20
+
 type PortCheck = { loading: boolean; conflicts: Conflict[] | null }
 
-function RuleModal({ rule, open, onClose, onSaved }: { rule: Rule | null; open: boolean; onClose: () => void; onSaved: () => void }) {
-  const { message } = App.useApp()
-  const [form] = Form.useForm<Rule>()
+interface FormValues {
+  name: string
+  proto: Proto
+  listen_port: string
+  target: string
+  remark: string
+  enabled: boolean
+}
+
+const emptyForm: FormValues = { name: '', proto: 'tcp', listen_port: '', target: '', remark: '', enabled: true }
+
+function RuleDialog({ rule, open, onClose, onSaved }: { rule: Rule | null; open: boolean; onClose: () => void; onSaved: () => void }) {
+  const { t } = useI18n()
+  const [v, setV] = useState<FormValues>(emptyForm)
+  const [submitted, setSubmitted] = useState(false)
   const [saving, setSaving] = useState(false)
   const [check, setCheck] = useState<PortCheck>({ loading: false, conflicts: null })
-  const proto = Form.useWatch('proto', form) as Proto | undefined
-  const port = Form.useWatch('listen_port', form) as number | undefined
   const seq = useRef(0)
+  const port = Number(v.listen_port)
+  const portValid = Number.isInteger(port) && port >= 1 && port <= 65535
 
   useEffect(() => {
     if (!open) return
-    form.resetFields()
-    form.setFieldsValue(rule ?? { proto: 'tcp', enabled: true, name: '', target: '', remark: '' })
+    setV(rule ? { ...rule, listen_port: String(rule.listen_port), remark: rule.remark ?? '' } : emptyForm)
+    setSubmitted(false)
     setCheck({ loading: false, conflicts: null })
-  }, [open, rule, form])
+  }, [open, rule])
 
   // 端口实时冲突检查（防抖）
   useEffect(() => {
-    if (!open || !proto || !port || port < 1 || port > 65535) {
+    if (!open || !portValid) {
       setCheck({ loading: false, conflicts: null })
       return
     }
     const id = ++seq.current
     setCheck((c) => ({ ...c, loading: true }))
-    const t = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       try {
-        const r = await api.checkPort(proto, port, rule?.id)
+        const r = await api.checkPort(v.proto, port, rule?.id)
         if (id === seq.current) setCheck({ loading: false, conflicts: r.conflicts })
       } catch {
         if (id === seq.current) setCheck({ loading: false, conflicts: null })
       }
     }, 350)
-    return () => clearTimeout(t)
-  }, [open, proto, port, rule?.id])
+    return () => clearTimeout(timer)
+  }, [open, v.proto, port, portValid, rule?.id])
 
-  const submit = async () => {
-    const v = await form.validateFields()
+  const set = <K extends keyof FormValues>(k: K, val: FormValues[K]) => setV((s) => ({ ...s, [k]: val }))
+
+  const portError = !v.listen_port ? t('rules.portRequired') : !portValid ? t('rules.portRange') : ''
+  const targetError = !v.target.trim() ? t('rules.targetRequired') : !targetPattern.test(v.target.trim()) ? t('rules.targetFormat') : ''
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setSubmitted(true)
+    if (portError || targetError) return
     setSaving(true)
+    const body = { ...v, listen_port: port, target: v.target.trim() }
     try {
-      if (rule) await api.updateRule(rule.id, v)
-      else await api.createRule(v)
-      message.success(rule ? '已保存' : '已创建')
+      if (rule) await api.updateRule(rule.id, body)
+      else await api.createRule(body)
+      toast.success(rule ? t('rules.saved') : t('rules.created'))
       onSaved()
       onClose()
-    } catch (e) {
-      message.error((e as Error).message)
+    } catch (err) {
+      toast.error((err as Error).message)
     } finally {
       setSaving(false)
     }
   }
 
-  let portHelp: React.ReactNode = '本机监听端口'
-  let portStatus: '' | 'error' | 'success' | 'validating' = ''
-  if (check.loading) {
-    portHelp = '正在检查端口...'
-    portStatus = 'validating'
+  let portHelp = <FieldDescription>{t('rules.portHelp')}</FieldDescription>
+  if (submitted && portError) {
+    portHelp = <FieldError>{portError}</FieldError>
+  } else if (check.loading) {
+    portHelp = <FieldDescription>{t('rules.portChecking')}</FieldDescription>
+  } else if (check.conflicts?.length === 0) {
+    portHelp = <FieldDescription className="text-emerald-600">{t('rules.portFree')}</FieldDescription>
   } else if (check.conflicts) {
-    if (check.conflicts.length === 0) {
-      portHelp = <Typography.Text type="success">端口可用</Typography.Text>
-      portStatus = 'success'
-    } else {
-      portHelp = (
-        <>
-          {check.conflicts.map((c, i) => (
-            <div key={i}>{c.message}</div>
-          ))}
-        </>
-      )
-      portStatus = 'error'
-    }
+    portHelp = <FieldError errors={check.conflicts} />
   }
+  const portInvalid = (submitted && !!portError) || !!check.conflicts?.length
 
   return (
-    <Modal
-      open={open}
-      title={rule ? '编辑规则' : '新建转发规则'}
-      onCancel={onClose}
-      onOk={submit}
-      confirmLoading={saving}
-      okText={rule ? '保存' : '创建'}
-      destroyOnHidden
-    >
-      <Form form={form} layout="vertical" requiredMark="optional">
-        <Form.Item name="name" label="名称">
-          <Input placeholder="留空自动生成" maxLength={64} />
-        </Form.Item>
-        <Form.Item name="proto" label="协议" rules={[{ required: true }]}>
-          <Radio.Group
-            optionType="button"
-            buttonStyle="solid"
-            options={[
-              { label: 'TCP', value: 'tcp' },
-              { label: 'UDP', value: 'udp' },
-              { label: 'TCP + UDP', value: 'both' },
-            ]}
-          />
-        </Form.Item>
-        <Space.Compact block style={{ alignItems: 'flex-start' }}>
-          <Form.Item
-            name="listen_port"
-            label="监听端口"
-            style={{ width: '40%' }}
-            rules={[{ required: true, message: '请输入端口' }]}
-            validateStatus={portStatus}
-            help={portHelp}
-            hasFeedback={portStatus !== ''}
-          >
-            <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="如 8080" />
-          </Form.Item>
-          <Form.Item
-            name="target"
-            label="转发到"
-            style={{ width: '60%', marginLeft: 8 }}
-            rules={[
-              { required: true, message: '请输入目标地址' },
-              { pattern: targetPattern, message: '格式为 IP:端口 或 域名:端口' },
-            ]}
-          >
-            <Input placeholder="10.0.0.5:80 或 example.com:80" className="mono" />
-          </Form.Item>
-        </Space.Compact>
-        <Form.Item name="remark" label="备注">
-          <Input.TextArea rows={2} maxLength={200} />
-        </Form.Item>
-        <Form.Item name="enabled" label="启用" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-      </Form>
-    </Modal>
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <form onSubmit={submit} noValidate className="flex flex-col gap-6">
+          <DialogHeader>
+            <DialogTitle>{rule ? t('rules.edit') : t('rules.new')}</DialogTitle>
+          </DialogHeader>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="rule-name">{t('rules.name')}</FieldLabel>
+              <Input id="rule-name" maxLength={64} placeholder={t('rules.namePlaceholder')} value={v.name} onChange={(e) => set('name', e.target.value)} />
+            </Field>
+            <Field>
+              <FieldLabel>{t('rules.proto')}</FieldLabel>
+              <ToggleGroup type="single" variant="outline" value={v.proto} onValueChange={(p) => p && set('proto', p as Proto)} className="justify-start">
+                {(['tcp', 'udp', 'both'] as const).map((p) => (
+                  <ToggleGroupItem key={p} value={p} className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">
+                    {p === 'both' ? 'TCP + UDP' : p.toUpperCase()}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            </Field>
+            <div className="grid gap-4 sm:grid-cols-[2fr_3fr]">
+              <Field data-invalid={portInvalid}>
+                <FieldLabel htmlFor="rule-port">{t('rules.listenPort')}</FieldLabel>
+                <Input
+                  id="rule-port"
+                  inputMode="numeric"
+                  placeholder={t('rules.portPlaceholder')}
+                  value={v.listen_port}
+                  aria-invalid={portInvalid}
+                  onChange={(e) => set('listen_port', e.target.value.replace(/\D/g, '').slice(0, 5))}
+                />
+                {portHelp}
+              </Field>
+              <Field data-invalid={submitted && !!targetError}>
+                <FieldLabel htmlFor="rule-target">{t('rules.forwardTo')}</FieldLabel>
+                <Input
+                  id="rule-target"
+                  className="font-mono"
+                  placeholder={t('rules.targetPlaceholder')}
+                  value={v.target}
+                  aria-invalid={submitted && !!targetError}
+                  onChange={(e) => set('target', e.target.value)}
+                />
+                {submitted && targetError && <FieldError>{targetError}</FieldError>}
+              </Field>
+            </div>
+            <Field>
+              <FieldLabel htmlFor="rule-remark">{t('rules.remark')}</FieldLabel>
+              <Textarea id="rule-remark" rows={2} maxLength={200} value={v.remark} onChange={(e) => set('remark', e.target.value)} />
+            </Field>
+            <Field orientation="horizontal">
+              <Switch id="rule-enabled" checked={v.enabled} onCheckedChange={(c) => set('enabled', c)} />
+              <FieldLabel htmlFor="rule-enabled">{t('rules.enabled')}</FieldLabel>
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>
+              {t('common.cancel')}
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving && <Spinner />}
+              {rule ? t('common.save') : t('common.create')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
 export default function Rules() {
-  const { message } = App.useApp()
+  const { t } = useI18n()
   const [rules, setRules] = useState<Rule[]>([])
   const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState<Rule | null>(null)
-  const [modalOpen, setModalOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [deleting, setDeleting] = useState<Rule | null>(null)
   const [toggling, setToggling] = useState<string | null>(null)
   const [probes, setProbes] = useState<Record<string, ProbeState>>({})
+  const [protoFilter, setProtoFilter] = useState<Proto | 'all'>('all')
+  const [portSort, setPortSort] = useState<'asc' | 'desc' | null>(null)
+  const [page, setPage] = useState(1)
 
   const probe = useCallback(async (id: string) => {
     setProbes((p) => ({ ...p, [id]: { ...p[id], loading: true, error: undefined } }))
@@ -190,24 +242,21 @@ export default function Rules() {
       return rest
     })
 
-  const load = useCallback(
-    async (quiet = false) => {
-      if (!quiet) setLoading(true)
-      try {
-        setRules(await api.rules())
-      } catch (e) {
-        if (!quiet) message.error((e as Error).message)
-      } finally {
-        if (!quiet) setLoading(false)
-      }
-    },
-    [message],
-  )
+  const load = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true)
+    try {
+      setRules(await api.rules())
+    } catch (e) {
+      if (!quiet) toast.error((e as Error).message)
+    } finally {
+      if (!quiet) setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     load()
-    const t = setInterval(() => load(true), 5000)
-    return () => clearInterval(t)
+    const timer = setInterval(() => load(true), 5000)
+    return () => clearInterval(timer)
   }, [load])
 
   const toggle = async (r: Rule, enabled: boolean) => {
@@ -217,7 +266,7 @@ export default function Rules() {
       clearProbe(r.id)
       await load(true)
     } catch (e) {
-      message.error((e as Error).message)
+      toast.error((e as Error).message)
     } finally {
       setToggling(null)
     }
@@ -226,144 +275,194 @@ export default function Rules() {
   const remove = async (r: Rule) => {
     try {
       await api.deleteRule(r.id)
-      message.success('已删除')
+      toast.success(t('rules.deleted'))
       await load(true)
     } catch (e) {
-      message.error((e as Error).message)
+      toast.error((e as Error).message)
     }
   }
 
+  const view = useMemo(() => {
+    const list = protoFilter === 'all' ? rules : rules.filter((r) => r.proto === protoFilter)
+    if (!portSort) return list
+    return [...list].sort((a, b) => (portSort === 'asc' ? a.listen_port - b.listen_port : b.listen_port - a.listen_port))
+  }, [rules, protoFilter, portSort])
+  const current = clampPage(page, pageSize, view.length)
+  const pageRows = view.slice((current - 1) * pageSize, current * pageSize)
+
   const errors = rules.filter((r) => r.status?.state === 'error')
+  const SortIcon = portSort === 'asc' ? ArrowUp : portSort === 'desc' ? ArrowDown : ArrowUpDown
 
   return (
-    <Card
-      title="转发规则"
-      extra={
-        <Space>
-          <Button icon={<ApiOutlined />} disabled={rules.length === 0} onClick={() => rules.forEach((r) => probe(r.id))}>
-            全部检测
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('rules.title')}</CardTitle>
+        <CardAction className="flex gap-2">
+          <Button variant="outline" disabled={rules.length === 0} onClick={() => rules.forEach((r) => probe(r.id))}>
+            <Activity />
+            <span className="hidden sm:inline">{t('rules.probeAll')}</span>
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading} />
+          <Button variant="outline" size="icon" aria-label={t('common.refresh')} disabled={loading} onClick={() => load()}>
+            {loading ? <Spinner /> : <RefreshCw />}
+          </Button>
           <Button
-            type="primary"
-            icon={<PlusOutlined />}
             onClick={() => {
               setEditing(null)
-              setModalOpen(true)
+              setDialogOpen(true)
             }}
           >
-            新建规则
+            <Plus />
+            {t('rules.newButton')}
           </Button>
-        </Space>
-      }
-    >
-      {errors.length > 0 && (
-        <Alert type="error" showIcon style={{ marginBottom: 16 }} title={`${errors.length} 条规则运行异常，鼠标悬停状态查看原因`} />
-      )}
-      <Table<Rule>
-        rowKey="id"
-        loading={loading}
-        dataSource={rules}
-        pagination={{ pageSize: 20, hideOnSinglePage: true }}
-        scroll={{ x: 900 }}
-        locale={{ emptyText: '暂无规则，点击右上角「新建规则」添加' }}
-        columns={[
-          {
-            title: '名称',
-            dataIndex: 'name',
-            render: (n: string, r) => (
-              <div>
-                <b>{n}</b>
-                {r.remark && (
-                  <div>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {r.remark}
-                    </Typography.Text>
-                  </div>
-                )}
-              </div>
-            ),
-          },
-          {
-            title: '协议',
-            dataIndex: 'proto',
-            width: 110,
-            filters: [
-              { text: 'TCP', value: 'tcp' },
-              { text: 'UDP', value: 'udp' },
-              { text: 'TCP+UDP', value: 'both' },
-            ],
-            onFilter: (v, r) => r.proto === v,
-            render: (p: Proto) => <Tag color={p === 'tcp' ? 'blue' : p === 'udp' ? 'purple' : 'cyan'}>{p === 'both' ? 'TCP+UDP' : p.toUpperCase()}</Tag>,
-          },
-          {
-            title: '监听端口',
-            dataIndex: 'listen_port',
-            width: 110,
-            sorter: (a, b) => a.listen_port - b.listen_port,
-            render: (p: number) => <span className="mono">:{p}</span>,
-          },
-          {
-            title: '目标',
-            dataIndex: 'target',
-            render: (t: string) => <span className="mono">{t}</span>,
-          },
-          {
-            title: '连通性',
-            width: 140,
-            render: (_, r) => <ProbeCell state={probes[r.id]} onProbe={() => probe(r.id)} />,
-          },
-          {
-            title: '状态',
-            width: 100,
-            render: (_, r) => {
-              const s = r.status ?? { state: 'stopped' }
-              const tag = stateTag[s.state] ?? stateTag.stopped
-              const tip = s.message || (s.pids?.length ? `PID ${s.pids.join(', ')}${s.restarts ? `，已重启 ${s.restarts} 次` : ''}` : '')
-              return (
-                <Tooltip title={tip}>
-                  <Tag color={tag.color}>{tag.text}</Tag>
-                </Tooltip>
-              )
-            },
-          },
-          {
-            title: '启用',
-            dataIndex: 'enabled',
-            width: 80,
-            render: (e: boolean, r) => <Switch size="small" checked={e} loading={toggling === r.id} onChange={(v) => toggle(r, v)} />,
-          },
-          {
-            title: '操作',
-            width: 110,
-            render: (_, r) => (
-              <Space>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {errors.length > 0 && <Notice type="error" title={t('rules.errorCount', { n: errors.length })} />}
+        <Table className="min-w-[860px]">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t('rules.name')}</TableHead>
+              <TableHead className="w-32">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="sm" className="-ml-2.5 text-sm">
+                      {t('rules.proto')}
+                      <Filter className={cn(protoFilter !== 'all' && 'text-foreground fill-current')} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuRadioGroup
+                      value={protoFilter}
+                      onValueChange={(f) => {
+                        setProtoFilter(f as Proto | 'all')
+                        setPage(1)
+                      }}
+                    >
+                      <DropdownMenuRadioItem value="all">{t('common.all')}</DropdownMenuRadioItem>
+                      {(Object.keys(protoLabel) as Proto[]).map((p) => (
+                        <DropdownMenuRadioItem key={p} value={p}>
+                          {protoLabel[p]}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </TableHead>
+              <TableHead className="w-32">
                 <Button
-                  size="small"
-                  type="text"
-                  icon={<EditOutlined />}
-                  onClick={() => {
-                    setEditing(r)
-                    setModalOpen(true)
-                  }}
-                />
-                <Popconfirm title={`删除规则「${r.name}」？`} okText="删除" okButtonProps={{ danger: true }} onConfirm={() => remove(r)}>
-                  <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-                </Popconfirm>
-              </Space>
-            ),
-          },
-        ]}
-      />
-      <RuleModal
+                  variant="ghost"
+                  size="sm"
+                  className="-ml-2.5 text-sm"
+                  onClick={() => setPortSort((s) => (s === null ? 'asc' : s === 'asc' ? 'desc' : null))}
+                >
+                  {t('rules.listenPort')}
+                  <SortIcon className={cn(!portSort && 'text-muted-foreground')} />
+                </Button>
+              </TableHead>
+              <TableHead>{t('rules.target')}</TableHead>
+              <TableHead className="w-40">{t('rules.connectivity')}</TableHead>
+              <TableHead className="w-24">{t('rules.status')}</TableHead>
+              <TableHead className="w-20">{t('rules.enabled')}</TableHead>
+              <TableHead className="w-24">{t('rules.actions')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {pageRows.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                  {loading ? <Spinner className="mx-auto" /> : t('rules.empty')}
+                </TableCell>
+              </TableRow>
+            )}
+            {pageRows.map((r) => {
+              const s = r.status ?? { state: 'stopped' as const }
+              const state = s.state in stateBadge ? s.state : 'stopped'
+              const tip =
+                s.message || (s.pids?.length ? `PID ${s.pids.join(', ')}${s.restarts ? t('rules.restarts', { n: s.restarts }) : ''}` : '')
+              const badge = <Badge className={stateBadge[state]}>{t(`state.${state}`)}</Badge>
+              return (
+                <TableRow key={r.id}>
+                  <TableCell className="whitespace-normal">
+                    <div className="font-medium">{r.name}</div>
+                    {r.remark && <div className="text-xs text-muted-foreground">{r.remark}</div>}
+                  </TableCell>
+                  <TableCell>
+                    <Badge className={protoBadge[r.proto]}>{protoLabel[r.proto]}</Badge>
+                  </TableCell>
+                  <TableCell className="font-mono">:{r.listen_port}</TableCell>
+                  <TableCell className="font-mono">{r.target}</TableCell>
+                  <TableCell>
+                    <ProbeCell state={probes[r.id]} onProbe={() => probe(r.id)} />
+                  </TableCell>
+                  <TableCell>
+                    {tip ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="cursor-default">{badge}</span>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-sm">{tip}</TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      badge
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Switch checked={r.enabled} disabled={toggling === r.id} onCheckedChange={(c) => toggle(r, c)} />
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={t('common.edit')}
+                        onClick={() => {
+                          setEditing(r)
+                          setDialogOpen(true)
+                        }}
+                      >
+                        <Pencil />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={t('common.delete')}
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => setDeleting(r)}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+        <Pager page={current} pageSize={pageSize} total={view.length} onChange={setPage} />
+      </CardContent>
+
+      <RuleDialog
         rule={editing}
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
         onSaved={() => {
           if (editing) clearProbe(editing.id)
           load(true)
         }}
       />
+      <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('rules.confirmDelete', { name: deleting?.name ?? '' })}</AlertDialogTitle>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => deleting && remove(deleting)}>
+              {t('common.delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   )
 }

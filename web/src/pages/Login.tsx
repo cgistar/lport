@@ -1,44 +1,84 @@
-import { useState } from 'react'
-import { Alert, Button, Card, Form, Input } from 'antd'
-import { LockOutlined, SwapOutlined, UserOutlined } from '@ant-design/icons'
+import { useState, type FormEvent } from 'react'
+import { ArrowLeftRight } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
+import { Spinner } from '@/components/ui/spinner'
+import Notice from '@/components/notice'
 import { api } from '../api'
+import { useI18n } from '../i18n'
+import LangSwitch from '../LangSwitch'
 
 export default function Login({ onLogin }: { onLogin: (user: string) => void }) {
+  const { t } = useI18n()
+  const [username, setUsername] = useState('admin')
+  const [password, setPassword] = useState('')
+  const [touched, setTouched] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const submit = async (v: { username: string; password: string }) => {
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setTouched(true)
+    if (!username || !password) return
     setLoading(true)
     setError('')
     try {
-      const r = await api.login(v.username, v.password)
+      const r = await api.login(username, password)
       onLogin(r.username)
-    } catch (e) {
-      setError((e as Error).message)
+    } catch (err) {
+      setError((err as Error).message)
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="login-wrap">
-      <Card style={{ width: 360, maxWidth: '100%' }}>
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <SwapOutlined style={{ fontSize: 32, color: '#1677ff' }} />
-          <h2 style={{ margin: '8px 0 0' }}>lport 端口转发管理</h2>
-        </div>
-        {error && <Alert type="error" title={error} showIcon style={{ marginBottom: 16 }} />}
-        <Form onFinish={submit} size="large" initialValues={{ username: 'admin' }}>
-          <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input prefix={<UserOutlined />} placeholder="用户名" autoComplete="username" />
-          </Form.Item>
-          <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password prefix={<LockOutlined />} placeholder="密码" autoComplete="current-password" />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" block loading={loading}>
-            登录
-          </Button>
-        </Form>
+    <div className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
+      <div className="fixed top-3 right-4">
+        <LangSwitch />
+      </div>
+      <Card className="w-full max-w-sm">
+        <CardHeader className="items-center text-center">
+          <ArrowLeftRight className="mx-auto size-8" />
+          <CardTitle className="text-lg">{t('login.title')}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={submit} noValidate>
+            <FieldGroup>
+              {error && <Notice type="error" title={error} />}
+              <Field data-invalid={touched && !username}>
+                <FieldLabel htmlFor="username">{t('login.username')}</FieldLabel>
+                <Input
+                  id="username"
+                  autoComplete="username"
+                  value={username}
+                  aria-invalid={touched && !username}
+                  onChange={(e) => setUsername(e.target.value)}
+                />
+                {touched && !username && <FieldError>{t('login.usernameRequired')}</FieldError>}
+              </Field>
+              <Field data-invalid={touched && !password}>
+                <FieldLabel htmlFor="password">{t('login.password')}</FieldLabel>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete="current-password"
+                  autoFocus
+                  value={password}
+                  aria-invalid={touched && !password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+                {touched && !password && <FieldError>{t('login.passwordRequired')}</FieldError>}
+              </Field>
+              <Button type="submit" size="lg" disabled={loading}>
+                {loading && <Spinner />}
+                {t('login.submit')}
+              </Button>
+            </FieldGroup>
+          </form>
+        </CardContent>
       </Card>
     </div>
   )

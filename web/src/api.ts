@@ -1,3 +1,5 @@
+import { getLang, tr } from './i18n'
+
 export type Proto = 'tcp' | 'udp' | 'both'
 export type Backend = 'socat' | 'iptables' | 'nftables'
 
@@ -97,7 +99,8 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   const res = await fetch(url, {
     method,
     credentials: 'same-origin',
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    // 后端按 X-Lport-Lang 返回对应语言的错误与状态消息
+    headers: body !== undefined ? { 'Content-Type': 'application/json', 'X-Lport-Lang': getLang() } : { 'X-Lport-Lang': getLang() },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   let data: unknown = null
@@ -108,10 +111,10 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   }
   if (res.status === 401 && url !== '/api/login') {
     window.dispatchEvent(new Event('lport:unauthorized'))
-    throw new UnauthorizedError('未登录')
+    throw new UnauthorizedError(tr('api.unauthorized'))
   }
   if (!res.ok) {
-    const msg = (data as { error?: string } | null)?.error ?? `请求失败 (${res.status})`
+    const msg = (data as { error?: string } | null)?.error ?? tr('api.failed', { status: res.status })
     throw new Error(msg)
   }
   return data as T
@@ -142,11 +145,6 @@ export const api = {
   listening: () => request<Listener[]>('GET', '/api/ports/listening'),
 }
 
-export const backendLabels: Record<Backend, string> = {
-  socat: 'socat（用户态进程）',
-  iptables: 'iptables（内核 NAT）',
-  nftables: 'nftables（内核 NAT）',
-}
 
 export const toolForBackend: Record<Backend, string> = {
   socat: 'socat',

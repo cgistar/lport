@@ -1,10 +1,30 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Alert, App, Button, Card, Col, Descriptions, Modal, Row, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { CheckCircleFilled, CloseCircleFilled, DownloadOutlined, ReloadOutlined } from '@ant-design/icons'
-import { api, backendLabels, type InstallResult, type SystemInfo, type Tool } from '../api'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { CircleCheck, CircleX, Download, RefreshCw } from 'lucide-react'
+import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import CopyButton from '@/components/copy-button'
+import Notice from '@/components/notice'
+import { api, type InstallResult, type SystemInfo } from '../api'
+import { useI18n } from '../i18n'
+
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[8.5rem_1fr] items-center gap-2 py-1.5 text-sm">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="flex min-w-0 flex-wrap items-center gap-2">{children}</dd>
+    </div>
+  )
+}
 
 export default function Dashboard() {
-  const { message } = App.useApp()
+  const { t } = useI18n()
   const [data, setData] = useState<SystemInfo | null>(null)
   const [loading, setLoading] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
@@ -15,11 +35,11 @@ export default function Dashboard() {
     try {
       setData(await api.system())
     } catch (e) {
-      message.error((e as Error).message)
+      toast.error((e as Error).message)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [])
 
   useEffect(() => {
     load()
@@ -30,168 +50,170 @@ export default function Dashboard() {
     try {
       const r = await api.install(tools)
       setResult(r)
-      if (r.ok) message.success('安装完成')
+      if (r.ok) toast.success(t('dash.installDone'))
       await load()
     } catch (e) {
-      message.error((e as Error).message)
+      toast.error((e as Error).message)
     } finally {
       setInstalling(null)
     }
   }
 
-  if (!data) return <Card loading />
+  if (!data) {
+    return (
+      <div className="grid gap-4 lg:grid-cols-[5fr_7fr]">
+        <Skeleton className="h-80 rounded-xl" />
+        <Skeleton className="h-80 rounded-xl" />
+      </div>
+    )
+  }
   const { info } = data
-  const missing = info.tools.filter((t) => !t.installed)
-  const backendTool = info.tools.find((t) => t.name === data.backend)
+  const missing = info.tools.filter((tool) => !tool.installed)
+  const backendTool = info.tools.find((tool) => tool.name === data.backend)
+  const canInstall = info.is_root && !!info.package_manager && installing === null
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-      {data.sync_error && <Alert type="error" showIcon title="转发规则应用失败" description={data.sync_error} />}
-      {backendTool && !backendTool.installed && (
-        <Alert
-          type="warning"
-          showIcon
-          title={`当前后端 ${data.backend} 依赖的工具未安装，转发规则不会生效，请先安装或在设置中切换后端。`}
-        />
+    <div className="flex flex-col gap-4">
+      {data.sync_error && (
+        <Notice type="error" title={t('dash.syncError')}>
+          {data.sync_error}
+        </Notice>
       )}
-      {!info.is_root && <Alert type="warning" showIcon title="lport 未以 root 运行，内核转发后端与软件安装不可用。" />}
+      {backendTool && !backendTool.installed && <Notice type="warning" title={t('dash.backendMissing', { backend: data.backend })} />}
+      {!info.is_root && <Notice type="warning" title={t('dash.notRoot')} />}
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={10}>
-          <Card
-            title="系统信息"
-            extra={<Button type="text" icon={<ReloadOutlined />} loading={loading} onClick={load} />}
-            style={{ height: '100%' }}
-          >
-            <Descriptions column={1} size="small">
-              <Descriptions.Item label="系统">{info.os_name || info.os_id || '未知'}</Descriptions.Item>
-              <Descriptions.Item label="内核">{info.kernel}</Descriptions.Item>
-              <Descriptions.Item label="包管理器">{info.package_manager || '未识别'}</Descriptions.Item>
-              <Descriptions.Item label="服务管理">{info.init_system}</Descriptions.Item>
-              <Descriptions.Item label="IP 转发">
-                {info.ip_forward ? <Tag color="green">已开启</Tag> : <Tag>未开启</Tag>}
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  内核后端启用时自动开启
-                </Typography.Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="当前后端">
-                <Tag color="blue">{backendLabels[data.backend]}</Tag>
-                {data.backend_mode === 'map' && <Tag color="green">map 查找模式</Tag>}
+      <div className="grid gap-4 lg:grid-cols-[5fr_7fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle>{t('dash.system')}</CardTitle>
+            <CardAction>
+              <Button variant="ghost" size="icon-sm" aria-label={t('common.refresh')} disabled={loading} onClick={load}>
+                {loading ? <Spinner /> : <RefreshCw />}
+              </Button>
+            </CardAction>
+          </CardHeader>
+          <CardContent>
+            <dl>
+              <Row label={t('dash.os')}>{info.os_name || info.os_id || t('dash.unknown')}</Row>
+              <Row label={t('dash.kernel')}>{info.kernel}</Row>
+              <Row label={t('dash.packageManager')}>{info.package_manager || t('dash.notDetected')}</Row>
+              <Row label={t('dash.initSystem')}>{info.init_system}</Row>
+              <Row label={t('dash.ipForward')}>
+                {info.ip_forward ? (
+                  <Badge className="bg-emerald-50 text-emerald-700">{t('dash.on')}</Badge>
+                ) : (
+                  <Badge variant="secondary">{t('dash.off')}</Badge>
+                )}
+                <span className="text-xs text-muted-foreground">{t('dash.ipForwardHint')}</span>
+              </Row>
+              <Row label={t('dash.backend')}>
+                <Badge variant="outline">{t(`backend.${data.backend}`)}</Badge>
+                {data.backend_mode === 'map' && <Badge className="bg-emerald-50 text-emerald-700">{t('dash.mapMode')}</Badge>}
                 {data.backend_mode === 'linear' && (
-                  <Tooltip title="当前 nft 或内核版本不支持 map 方式 DNAT（需 nft ≥ 0.9.4、内核 ≥ 5.6），规则逐条匹配">
-                    <Tag color="orange">兼容模式</Tag>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Badge className="bg-amber-50 text-amber-700">{t('dash.linearMode')}</Badge>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-xs">{t('dash.linearTip')}</TooltipContent>
                   </Tooltip>
                 )}
-              </Descriptions.Item>
-              <Descriptions.Item label="管理地址">
-                <span className="mono">{data.listen}</span>
-              </Descriptions.Item>
-              <Descriptions.Item label="配置文件">
-                <Typography.Text className="mono" copyable>
-                  {data.config_path}
-                </Typography.Text>
-              </Descriptions.Item>
-            </Descriptions>
-          </Card>
-        </Col>
-        <Col xs={24} lg={14}>
-          <Card
-            title="依赖工具"
-            style={{ height: '100%' }}
-            extra={
-              missing.length > 1 && (
-                <Button
-                  type="primary"
-                  icon={<DownloadOutlined />}
-                  loading={installing === 'all'}
-                  disabled={!info.is_root || !info.package_manager || installing !== null}
-                  onClick={() => install(missing.map((t) => t.name), 'all')}
-                >
-                  全部安装
+              </Row>
+              <Row label={t('dash.listen')}>
+                <span className="font-mono">{data.listen}</span>
+              </Row>
+              <Row label={t('dash.config')}>
+                <span className="font-mono break-all">{data.config_path}</span>
+                <CopyButton text={data.config_path} />
+              </Row>
+            </dl>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t('dash.tools')}</CardTitle>
+            {missing.length > 1 && (
+              <CardAction>
+                <Button disabled={!canInstall} onClick={() => install(missing.map((tool) => tool.name), 'all')}>
+                  {installing === 'all' ? <Spinner /> : <Download />}
+                  {t('dash.installAll')}
                 </Button>
-              )
-            }
-          >
-            <Table<Tool>
-              rowKey="name"
-              size="small"
-              pagination={false}
-              dataSource={info.tools}
-              scroll={{ x: true }}
-              columns={[
-                {
-                  title: '工具',
-                  dataIndex: 'name',
-                  render: (n: string, t) => (
-                    <Space>
-                      {t.installed ? (
-                        <CheckCircleFilled style={{ color: '#52c41a' }} />
+              </CardAction>
+            )}
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('dash.tool')}</TableHead>
+                  <TableHead>{t('dash.status')}</TableHead>
+                  <TableHead className="w-24" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {info.tools.map((tool) => (
+                  <TableRow key={tool.name}>
+                    <TableCell>
+                      <span className="flex items-center gap-2 font-medium">
+                        {tool.installed ? <CircleCheck className="size-4 text-emerald-600" /> : <CircleX className="size-4 text-red-500" />}
+                        {tool.name}
+                      </span>
+                    </TableCell>
+                    <TableCell className="whitespace-normal">
+                      {tool.installed ? (
+                        <span className="text-xs text-muted-foreground">{tool.version || tool.path}</span>
                       ) : (
-                        <CloseCircleFilled style={{ color: '#ff4d4f' }} />
+                        <Badge variant="destructive">{t('common.notInstalled')}</Badge>
                       )}
-                      <b>{n}</b>
-                    </Space>
-                  ),
-                },
-                {
-                  title: '状态',
-                  render: (_, t) =>
-                    t.installed ? (
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        {t.version || t.path}
-                      </Typography.Text>
-                    ) : (
-                      <Tag color="red">未安装</Tag>
-                    ),
-                },
-                {
-                  title: '',
-                  width: 100,
-                  render: (_, t) =>
-                    !t.installed && (
-                      <Button
-                        size="small"
-                        icon={<DownloadOutlined />}
-                        loading={installing === t.name}
-                        disabled={!info.is_root || !info.package_manager || installing !== null}
-                        onClick={() => install([t.name], t.name)}
-                      >
-                        安装
-                      </Button>
-                    ),
-                },
-              ]}
-            />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {!tool.installed && (
+                        <Button size="sm" variant="outline" disabled={!canInstall} onClick={() => install([tool.name], tool.name)}>
+                          {installing === tool.name ? <Spinner /> : <Download />}
+                          {t('dash.install')}
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
             {info.install_command && (
-              <div style={{ marginTop: 16 }}>
-                <Typography.Text type="secondary">手动安装命令（{info.package_manager}）：</Typography.Text>
-                <Typography.Paragraph copyable className="install-output" style={{ marginTop: 8, marginBottom: 0 }}>
-                  {info.install_command}
-                </Typography.Paragraph>
+              <div className="flex flex-col gap-2">
+                <span className="text-sm text-muted-foreground">{t('dash.manualCommand', { pm: info.package_manager })}</span>
+                <div className="flex items-start gap-2 rounded-lg bg-neutral-900 p-3 font-mono text-xs break-all text-neutral-100">
+                  <span className="flex-1">{info.install_command}</span>
+                  <CopyButton text={info.install_command} className="text-neutral-300 hover:bg-neutral-800 hover:text-white" />
+                </div>
               </div>
             )}
-            {!info.package_manager && missing.length > 0 && (
-              <Alert type="warning" showIcon style={{ marginTop: 16 }} title="无法识别包管理器，请手动安装缺失工具。" />
-            )}
-          </Card>
-        </Col>
-      </Row>
+            {!info.package_manager && missing.length > 0 && <Notice type="warning" title={t('dash.noPackageManager')} />}
+          </CardContent>
+        </Card>
+      </div>
 
-      <Modal
-        open={result !== null}
-        title={result?.ok ? '安装成功' : '安装失败'}
-        width={720}
-        footer={<Button onClick={() => setResult(null)}>关闭</Button>}
-        onCancel={() => setResult(null)}
-      >
-        {result?.error && <Alert type="error" showIcon title={result.error} style={{ marginBottom: 12 }} />}
-        {result?.command && (
-          <Typography.Paragraph>
-            执行命令：<span className="mono">{result.command}</span>
-          </Typography.Paragraph>
-        )}
-        <pre className="install-output">{result?.output || '(无输出)'}</pre>
-      </Modal>
-    </Space>
+      <Dialog open={result !== null} onOpenChange={(open) => !open && setResult(null)}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{result?.ok ? t('dash.installOk') : t('dash.installFailed')}</DialogTitle>
+          </DialogHeader>
+          {result?.error && <Notice type="error" title={result.error} />}
+          {result?.command && (
+            <p className="text-sm">
+              {t('dash.command')}
+              <span className="font-mono">{result.command}</span>
+            </p>
+          )}
+          <pre className="max-h-96 overflow-auto rounded-lg bg-neutral-900 p-3 text-xs break-all whitespace-pre-wrap text-neutral-100">
+            {result?.output || t('dash.noOutput')}
+          </pre>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResult(null)}>
+              {t('common.close')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   )
 }
