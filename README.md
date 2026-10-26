@@ -84,6 +84,17 @@ rules:
 - 服务停止时会清除所有转发；启动时先清理残留再重新应用。
 - 如果系统中有其它 nftables 表的 forward 链默认策略为 drop（如 firewalld、Docker），被转发的流量可能仍被拦截，需要在对应防火墙中放行。iptables 后端会把 `LPORT_FWD` 插入 `FORWARD` 链首。
 
+## 发布
+
+推送 `v` 开头的 tag 即由 GitHub Actions（`.github/workflows/release.yml`）自动完成：构建前端、运行测试、交叉编译 amd64 / arm64 / armv7 / armv6 / 386，并创建 Release 上传 `lport-<版本>-linux-<架构>.tar.gz` 与 `sha256sums.txt`。
+
+```sh
+git tag v1.0.0 && git push origin v1.0.0      # 正式版
+git tag v1.1.0-rc1 && git push origin v1.1.0-rc1   # tag 含 "-" 时标记为预发布
+```
+
+在 Actions 页面手动运行该 workflow 只编译、上传构建产物，不创建 Release。
+
 ## 开发
 
 ```sh

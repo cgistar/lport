@@ -1,0 +1,80 @@
+# 交叉编译 lport 并发布到 GitHub Releases。
+#
+# 触发方式:
+#   - 推送 v 开头的 tag（如 v1.0.0）：编译全部架构并创建 Release；tag 含 "-"（如 v1.0.0-rc1）时标记为预发布
+#   - 手动运行（Actions 页面 Run workflow）：只编译并上传为构建产物，不创建 Release
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # git describe 需要完整历史与 tag
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 确定版本号
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(git describe --tags --always)-$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 构建前端 → go test → 交叉编译 amd64 / arm64 / armv7 / armv6 / 386，产物位于 release/
+      - name: 编译
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/build.sh
+
+      - name: 检查产物
+        run: |
+          cd release
+          sha256sum -c sha256sums.txt
+          for f in lport-*.tar.gz; do
+            tar -tzf "$f" | grep -q '/lport$' || { echo "$f 中缺少 lport"; exit 1; }
+          done
+          # 在 runner 上实际运行 amd64 版本做冒烟测试
+          tar -xzf lport-*-linux-amd64.tar.gz -O --wildcards '*/lport' > /tmp/lport
+          chmod +x /tmp/lport && /tmp/lport version && /tmp/lport detect
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: lport-${{ steps.version.outputs.version }}
+          path: release/*
+          if-no-files-found: error
+
+      - name: 发布 Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags=(--title "lport $TAG" --generate-notes)
+          [[ "$TAG" == *-* ]] && flags+=(--prerelease)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # 重新运行时覆盖已有产物
+            gh release upload "$TAG" release/*.tar.gz release/sha256sums.txt --clobber
+          else
+            gh release create "$TAG" release/*.tar.gz release/sha256sums.txt "${flags[@]}"
+          fi
