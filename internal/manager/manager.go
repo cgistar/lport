@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -237,11 +238,11 @@ func conflictErr(cs []Conflict) error {
 	if len(cs) == 0 {
 		return nil
 	}
-	msg := "端口冲突: " + cs[0].Message
-	for _, c := range cs[1:] {
-		msg += "；" + c.Message
+	msgs := make([]string, len(cs))
+	for i, c := range cs {
+		msgs[i] = c.Message
 	}
-	return errors.New(msg)
+	return fmt.Errorf("端口冲突: %s", strings.Join(msgs, "；"))
 }
 
 // mutate 在锁内修改规则、校验、保存并同步后端；同步失败时回滚。

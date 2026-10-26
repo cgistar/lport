@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"lport/internal/auth"
+	"lport/internal/manager"
 	"lport/internal/model"
 	"lport/internal/portcheck"
 	"lport/internal/sysinfo"
@@ -193,6 +194,9 @@ func (s *Server) checkPort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cs := s.mgr.CheckPort(proto, port, q.Get("exclude"), true)
+	if cs == nil {
+		cs = []manager.Conflict{} // 无冲突时返回 []，而不是 null
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"available": len(cs) == 0, "conflicts": cs})
 }
 

@@ -49,7 +49,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/", s.requireAuth(authed))
 
 	mux.Handle("/", s.spa())
-	return mux
+	return localize(mux)
 }
 
 // SocketPath 返回本机控制套接字路径，放在配置目录下（0700），仅 root 可访问。
