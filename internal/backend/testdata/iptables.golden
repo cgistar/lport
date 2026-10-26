@@ -1,0 +1,23 @@
+*nat
+:LPORT_PRE - [0:0]
+:LPORT_OUT - [0:0]
+:LPORT_POST - [0:0]
+-A LPORT_PRE -p tcp --dport 8080 -m comment --comment "lport:a1" -j DNAT --to-destination 10.0.0.5:80
+-A LPORT_OUT -p tcp --dport 8080 -m comment --comment "lport:a1" -j DNAT --to-destination 10.0.0.5:80
+-A LPORT_POST -p tcp -d 10.0.0.5 --dport 80 -m conntrack --ctstate DNAT -m comment --comment "lport:a1" -j MASQUERADE
+-A LPORT_PRE -p tcp --dport 5353 -m comment --comment "lport:b2" -j DNAT --to-destination 10.0.0.6:53
+-A LPORT_OUT -p tcp --dport 5353 -m comment --comment "lport:b2" -j DNAT --to-destination 10.0.0.6:53
+-A LPORT_POST -p tcp -d 10.0.0.6 --dport 53 -m conntrack --ctstate DNAT -m comment --comment "lport:b2" -j MASQUERADE
+-A LPORT_PRE -p udp --dport 5353 -m comment --comment "lport:b2" -j DNAT --to-destination 10.0.0.6:53
+-A LPORT_OUT -p udp --dport 5353 -m comment --comment "lport:b2" -j DNAT --to-destination 10.0.0.6:53
+-A LPORT_POST -p udp -d 10.0.0.6 --dport 53 -m conntrack --ctstate DNAT -m comment --comment "lport:b2" -j MASQUERADE
+COMMIT
+*filter
+:LPORT_FWD - [0:0]
+-A LPORT_FWD -p tcp -d 10.0.0.5 --dport 80 -m conntrack --ctstate DNAT -m comment --comment "lport:a1" -j ACCEPT
+-A LPORT_FWD -p tcp -s 10.0.0.5 --sport 80 -m conntrack --ctstate DNAT -m comment --comment "lport:a1" -j ACCEPT
+-A LPORT_FWD -p tcp -d 10.0.0.6 --dport 53 -m conntrack --ctstate DNAT -m comment --comment "lport:b2" -j ACCEPT
+-A LPORT_FWD -p tcp -s 10.0.0.6 --sport 53 -m conntrack --ctstate DNAT -m comment --comment "lport:b2" -j ACCEPT
+-A LPORT_FWD -p udp -d 10.0.0.6 --dport 53 -m conntrack --ctstate DNAT -m comment --comment "lport:b2" -j ACCEPT
+-A LPORT_FWD -p udp -s 10.0.0.6 --sport 53 -m conntrack --ctstate DNAT -m comment --comment "lport:b2" -j ACCEPT
+COMMIT

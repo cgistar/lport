@@ -1,0 +1,45 @@
+table ip lport {}
+delete table ip lport
+table ip lport {
+	set lports_tcp {
+		type inet_service
+		elements = { 8080, 5353, 8081 }
+	}
+	map fwd_tcp {
+		type inet_service : ipv4_addr . inet_service
+		elements = { 8080 : 10.0.0.5 . 80, 5353 : 10.0.0.6 . 53, 8081 : 10.0.0.5 . 80 }
+	}
+	set dst_tcp {
+		type ipv4_addr . inet_service
+		elements = { 10.0.0.5 . 80, 10.0.0.6 . 53 }
+	}
+	set lports_udp {
+		type inet_service
+		elements = { 5353 }
+	}
+	map fwd_udp {
+		type inet_service : ipv4_addr . inet_service
+		elements = { 5353 : 10.0.0.6 . 53 }
+	}
+	set dst_udp {
+		type ipv4_addr . inet_service
+		elements = { 10.0.0.6 . 53 }
+	}
+	chain prerouting {
+		type nat hook prerouting priority -100; policy accept;
+		tcp dport @lports_tcp counter ct mark set ct mark or 0x01000000
+		dnat ip addr . port to tcp dport map @fwd_tcp
+		udp dport @lports_udp counter ct mark set ct mark or 0x01000000
+		dnat ip addr . port to udp dport map @fwd_udp
+	}
+	chain output {
+		type nat hook output priority -100; policy accept;
+		fib daddr type local dnat ip addr . port to tcp dport map @fwd_tcp
+		fib daddr type local dnat ip addr . port to udp dport map @fwd_udp
+	}
+	chain postrouting {
+		type nat hook postrouting priority 100; policy accept;
+		ct status dnat ip daddr . tcp dport @dst_tcp masquerade
+		ct status dnat ip daddr . udp dport @dst_udp masquerade
+	}
+}

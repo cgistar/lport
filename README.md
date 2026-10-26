@@ -1,110 +1,92 @@
-# lport — 端口转发管理工具
+# lport
 
-单文件部署的 Linux 端口转发管理工具：通过 Web 界面把本机 TCP/UDP 端口转发到其它 `IP:端口`。
+Linux 端口转发管理工具：通过 Web 界面把本机 TCP/UDP 端口转发到其它 `IP/域名:端口`。单个二进制文件，无其它依赖。
 
-- 支持 Alpine / Debian / Ubuntu / CentOS / Rocky / Alma / Fedora
-- 三种转发后端（全局选择一种）：**nftables**（推荐）、**iptables**、**socat**；首次启动自动选择可用的最优后端
-- 自动检测依赖工具，缺失时显示对应发行版的安装命令，并可在界面一键安装
-- 端口冲突检查：规则之间、管理面板端口、系统已占用端口（显示占用进程）
-- 配置为单个 YAML 文件，可手动编辑，重启生效
-- 用户名密码登录；systemd / OpenRC 服务注册，开机自动恢复规则
+## 功能
+
+- 支持 Alpine / Debian / Ubuntu / CentOS / Rocky / Alma / Fedora，amd64 / arm64 / armv7 / armv6 / 386
+- 三种转发方式：**nftables**（推荐）、**iptables**、**socat**；缺少时可在界面一键安装
+- 目标支持 IP 或域名，域名每 60 秒重新解析，IP 变化自动更新
+- 端口冲突检查：规则之间、管理面板、系统已占用端口（显示占用进程）
+- 连通性检测：一键检测本机端口与目标端口是否可达，快速定位故障
+- 兼容 Docker 等将 FORWARD 默认策略设为 DROP 的环境
+- 配置为单个 YAML 文件，可手动编辑；注册为 systemd / OpenRC 服务，开机自动恢复
 
 ## 安装
 
+从 [Releases](https://github.com/cgistar/lport/releases) 下载对应架构的压缩包，解压后以 root 运行：
+
 ```sh
-# 构建（需要 Go 1.22+ 与 Node 20+）
-scripts/build.sh                    # 前端 + 全部架构：amd64 arm64 armv7 armv6 386
-scripts/build.sh amd64 arm64        # 只编译指定架构；SKIP_WEB=1 跳过前端，VERSION=v1.0 指定版本
-                                    # 产物: release/lport-<版本>-linux-<架构>.tar.gz + sha256sums.txt
-
-# 一键部署到远程服务器（自动识别远端架构，安装或升级为系统服务）
-scripts/deploy.sh root@host [--listen 127.0.0.1:8080]
-
-# 在服务器上（root）
-./lport detect                              # 查看系统与依赖工具状态
-./lport install --listen 0.0.0.0:8080       # 安装到 /usr/local/bin 并注册为服务
+tar -xzf lport-*-linux-amd64.tar.gz
+cd lport-*-linux-amd64
+./lport install
 ```
 
-`lport install` 首次运行时会交互询问：
+安装过程会询问：
 
-1. 管理员密码（配置中没有密码时；直接回车随机生成）
-2. 默认转发工具 `nftables / iptables / socat [nftables]`（配置中未指定时；所选工具未安装会询问是否安装）
-3. 是否注册为系统服务并开机自启（已安装过服务则直接升级并重启，不再询问）
+1. 管理员密码（直接回车随机生成）
+2. 默认转发工具 `nftables / iptables / socat [nftables]`，未安装时可自动安装
+3. 是否注册为系统服务并开机自启
 
-问答完成前不会写入配置，中途 Ctrl-C / Ctrl-D 不留下任何改动。加 `-y` 或在无终端环境（如脚本、管道）中运行时不提问，全部取默认值：随机密码（打印在输出中）、自动选择已安装的最优工具（都没有则安装 nftables）、注册服务。也可用 `--backend` 直接指定工具。
+非交互安装：`./lport install -y --backend nftables --listen 0.0.0.0:8080`
 
-## 命令
+安装完成后访问 `http://服务器IP:8080` 登录管理。
+
+## 使用
+
+### Web 界面
+
+- **概览**：系统信息、依赖工具状态与一键安装
+- **转发规则**：新增 / 编辑 / 启停 / 删除规则；输入端口时实时提示冲突；点击「连通性」图标检测，绿点成功、红点失败，再次点击重新检测
+- **设置**：切换转发工具、修改密码、查看系统已占用端口
+
+### 命令行
 
 | 命令 | 说明 |
 |---|---|
-| `lport serve [--config PATH] [--listen ADDR]` | 前台运行 Web 服务 |
-| `lport install [--config PATH] [--listen ADDR] [--backend NAME] [-y]` | 安装程序并（可选）注册 systemd / OpenRC 服务，交互式询问密码、转发工具 |
-| `lport uninstall [--purge]` | 卸载服务，`--purge` 同时删除配置目录 |
-| `lport passwd [新密码]` | 重置密码（不填则随机生成），自动重启服务 |
-| `lport probe [规则名\|ID\|端口 ...]` | 检测规则连通性（与 Web「连通性」相同），有失败项时退出码为 1 |
-| `lport detect` | 检测系统、包管理器、依赖工具 |
+| `lport install` | 安装或升级（已安装时直接升级并重启服务） |
+| `lport uninstall [--purge]` | 卸载服务，`--purge` 同时删除配置 |
+| `lport passwd [新密码]` | 重置管理员密码（不填则随机生成） |
+| `lport probe [规则名\|端口 ...]` | 命令行检测规则连通性，有失败时退出码为 1 |
+| `lport detect` | 检测系统环境与依赖工具 |
+| `lport serve` | 前台运行（调试用） |
 
-## 配置文件
+所有命令都支持 `--config` 指定配置文件，默认 `/etc/lport/config.yaml`。
 
-默认 `/etc/lport/config.yaml`：
+### 配置文件
 
 ```yaml
-listen: 0.0.0.0:8080
-backend: nftables         # nftables | iptables | socat；省略则首次启动自动选择
+listen: 0.0.0.0:8080      # 管理面板地址
+backend: nftables         # nftables | iptables | socat
 admin:
   username: admin
-  password: ""            # 可填明文密码，启动时自动转为 password_hash 并清空
-  password_hash: $2a$10$...
-session_secret: ...
+  password: ""            # 可填明文，启动时自动转为 password_hash
 rules:
-  - id: web01             # 可省略，启动时自动生成
-    name: web
+  - name: web
     proto: tcp            # tcp | udp | both
-    listen_port: 8080
-    target: 10.0.0.5:80
+    listen_port: 18080
+    target: example.com:80
     enabled: true
-    remark: ""
 ```
 
-- 手动编辑后执行 `systemctl restart lport`（或 `rc-service lport restart`）生效。
-- 启动时会完整校验配置，有错误（端口冲突、协议错误等）会拒绝启动并指出具体规则。
-- 服务运行期间在界面中修改会整体写回该文件，**手写的注释会丢失**；建议手动编辑后立即重启。
+手动修改后执行 `systemctl restart lport`（Alpine：`rc-service lport restart`）生效。
 
-## 转发后端
+### 转发工具对比
 
-| 后端 | 原理 | 说明 |
-|---|---|---|
-| socat | 每条规则一个 socat 子进程（`both` 为两个），崩溃自动重启 | 可转发到域名与 `127.0.0.1`；用户态转发，性能较低 |
-| iptables | nat 表 DNAT + MASQUERADE | 只操作自有链 `LPORT_PRE/OUT/POST/FWD`，不影响已有规则 |
-| nftables | 独立表 `table ip lport`，`nft -f` 原子替换；DNAT 通过 map 哈希查找 | 不影响其它表；规则数量增加不影响匹配性能 |
+| | nftables | iptables | socat |
+|---|---|---|---|
+| 性能 | 最高（内核转发，map 查找） | 高（内核转发） | 较低（用户态） |
+| 目标为本机 127.0.0.1 | 不支持 | 不支持 | 支持 |
+| 适用 | 新系统首选 | 老系统（如 CentOS 7） | 转发到本机端口 |
 
-- 首次启动（配置中未写 `backend`）时：以 root 运行则依次选择已安装的 nftables、iptables，否则使用 socat；若已有规则不适用于内核后端（如目标为 127.0.0.1）则跳过该后端。
-- nftables 默认使用 map 模式（每个协议一条 `dnat ip addr . port to tcp dport map @fwd_tcp`），需要 nft ≥ 0.9.4、内核 ≥ 5.6；不支持时（如 CentOS 7、Debian 10）自动降级为逐条规则的兼容模式，概览页会显示当前模式。
-- 内核后端（iptables/nftables）要求目标为非回环 IPv4 地址，并会自动开启 `net.ipv4.ip_forward`（写入 `/etc/sysctl.d/99-lport.conf`）。
-- 服务停止时会清除所有转发；启动时先清理残留再重新应用。
-- 如果系统中有其它 nftables 表的 forward 链默认策略为 drop（如 firewalld、Docker），被转发的流量可能仍被拦截，需要在对应防火墙中放行。iptables 后端会把 `LPORT_FWD` 插入 `FORWARD` 链首。
+## 从源码构建
 
-## 发布
-
-推送 `v` 开头的 tag 即由 GitHub Actions（`.github/workflows/release.yml`）自动完成：构建前端、运行测试、交叉编译 amd64 / arm64 / armv7 / armv6 / 386，并创建 Release 上传 `lport-<版本>-linux-<架构>.tar.gz` 与 `sha256sums.txt`。
+需要 Go 与 Node.js：
 
 ```sh
-git tag v1.0.0 && git push origin v1.0.0      # 正式版
-git tag v1.1.0-rc1 && git push origin v1.1.0-rc1   # tag 含 "-" 时标记为预发布
+scripts/build.sh                # 编译全部架构到 release/
+scripts/build.sh amd64 arm64    # 只编译指定架构
+scripts/deploy.sh root@host     # 编译并部署到远程服务器
 ```
 
-在 Actions 页面手动运行该 workflow 只编译、上传构建产物，不创建 Release。
-
-## 开发
-
-```sh
-# 终端 1：后端（非 root 时仅 socat 后端与 1024 以上端口可用）
-go run ./cmd/lport serve --config ./dev-config.yaml
-
-# 终端 2：前端热更新，/api 代理到 127.0.0.1:8080
-cd web && npm install && npm run dev
-
-make test
-```
-
-目录结构：`cmd/lport` 入口；`internal/config` YAML 配置；`internal/backend` 三种转发实现；`internal/portcheck` 端口占用检测；`internal/manager` 规则编排；`internal/api` HTTP 接口；`internal/service` 服务注册；`web/` Vite + React + Ant Design 前端（构建后通过 `go:embed` 嵌入）。
+推送 `v*` tag（如 `git tag v1.0.0 && git push origin v1.0.0`）会由 GitHub Actions 自动测试、编译并发布 Release。
