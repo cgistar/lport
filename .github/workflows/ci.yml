@@ -71,11 +71,24 @@ jobs:
 
       - name: 后端集成测试
         working-directory: internal/backend
-        run: sudo "$RUNNER_TEMP/backend.test" -test.run Integration -test.v -test.count=1
+        run: sudo "$RUNNER_TEMP/backend.test" -test.run Integration -test.v -test.count=1 | tee "$RUNNER_TEMP/backend.out"
 
       - name: 连通性检测集成测试
         working-directory: internal/manager
-        run: sudo "$RUNNER_TEMP/manager.test" -test.run Integration -test.v -test.count=1
+        run: sudo "$RUNNER_TEMP/manager.test" -test.run Integration -test.v -test.count=1 | tee "$RUNNER_TEMP/manager.out"
+
+      # 跳过不等于通过：任何集成测试被跳过（如缺少工具、非 root）都视为失败；结果汇总为注解，便于在运行页面查看
+      - name: 检查测试未被跳过
+        run: |
+          for f in backend manager; do
+            out="$RUNNER_TEMP/$f.out"
+            if grep -q -- '--- SKIP' "$out"; then
+              echo "::error title=$f 集成测试被跳过::$(grep -- '--- SKIP' "$out" | sed 's/^ *//' | paste -sd ';')"
+              exit 1
+            fi
+            summary=$(grep -E -- '--- (PASS|FAIL)|模式' "$out" | sed -E 's/^ *//; s/ *integration_test.go:[0-9]+: //' | paste -sd ';')
+            echo "::notice title=$f 集成测试::$summary"
+          done
 
       - name: 失败时输出防火墙状态
         if: failure()
