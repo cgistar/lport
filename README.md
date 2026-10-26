@@ -1,20 +1,24 @@
 # lport
 
-Linux 端口转发管理工具：通过 Web 界面把本机 TCP/UDP 端口转发到其它 `IP/域名:端口`。单个二进制文件，无其它依赖。
+English | [简体中文](README.zh-CN.md)
 
-## 功能
+Port forwarding manager for Linux: forward local TCP/UDP ports to any `IP/domain:port` through a web UI or the command line. Ships as a single binary with no other dependencies.
 
-- 支持 Alpine / Debian / Ubuntu / CentOS / Rocky / Alma / Fedora，amd64 / arm64 / armv7 / armv6 / 386
-- 三种转发方式：**nftables**（推荐）、**iptables**、**socat**；缺少时可在界面一键安装
-- 目标支持 IP 或域名，域名每 60 秒重新解析，IP 变化自动更新
-- 端口冲突检查：规则之间、管理面板、系统已占用端口（显示占用进程）
-- 连通性检测：一键检测本机端口与目标端口是否可达，快速定位故障
-- 兼容 Docker 等将 FORWARD 默认策略设为 DROP 的环境
-- 配置为单个 YAML 文件，可手动编辑；注册为 systemd / OpenRC 服务，开机自动恢复
+> The web UI and command output are currently in Chinese only.
 
-## 安装
+## Features
 
-从 [Releases](https://github.com/cgistar/lport/releases) 下载对应架构的压缩包，解压后以 root 运行：
+- Runs on Alpine / Debian / Ubuntu / CentOS / Rocky / Alma / Fedora, amd64 / arm64 / armv7 / armv6 / 386
+- Three forwarding backends: **nftables** (recommended), **iptables**, **socat**; a missing tool can be installed from the UI with one click
+- Targets can be IPs or domain names; domains are re-resolved every 60 seconds and rules follow IP changes automatically
+- Port conflict checks against other rules, the admin panel, and ports already in use on the system (with the owning process shown)
+- Connectivity probe: check in one click whether the local port and the target are reachable, to pinpoint failures quickly
+- Works in environments such as Docker hosts that set the FORWARD chain's default policy to DROP
+- Configuration is a single, hand-editable YAML file; registers as a systemd / OpenRC service and restores rules on boot
+
+## Installation
+
+Download the archive for your architecture from [Releases](https://github.com/cgistar/lport/releases), extract it, and run as root:
 
 ```sh
 tar -xzf lport-*-linux-amd64.tar.gz
@@ -22,50 +26,50 @@ cd lport-*-linux-amd64
 ./lport install
 ```
 
-安装过程会询问：
+The installer asks for:
 
-1. 管理员密码（直接回车随机生成）
-2. 默认转发工具 `nftables / iptables / socat [nftables]`，未安装时可自动安装
-3. 是否注册为系统服务并开机自启
+1. The admin password (press Enter to generate a random one)
+2. The default forwarding backend `nftables / iptables / socat [nftables]`; it can install the tool if it is missing
+3. Whether to register a system service that starts on boot
 
-非交互安装：`./lport install -y --backend nftables --listen 0.0.0.0:8080`
+Non-interactive install: `./lport install -y --backend nftables --listen 0.0.0.0:8080`
 
-安装完成后访问 `http://服务器IP:8080` 登录管理。
+When it finishes, open `http://<server-ip>:8080` and log in.
 
-## 使用
+## Usage
 
-### Web 界面
+### Web UI
 
-- **概览**：系统信息、依赖工具状态与一键安装
-- **转发规则**：新增 / 编辑 / 启停 / 删除规则；输入端口时实时提示冲突；点击「连通性」图标检测，绿点成功、红点失败，再次点击重新检测
-- **设置**：切换转发工具、修改密码、查看系统已占用端口
+- **Overview**: system information, dependency status, and one-click install
+- **Rules**: add / edit / enable / disable / delete rules; conflicts are flagged as you type a port; click the connectivity icon to probe (green dot = OK, red dot = failed, click again to re-run)
+- **Settings**: switch backend, change password, view ports in use on the system
 
-### 命令行
+### Command line
 
-| 命令 | 说明 |
+| Command | Description |
 |---|---|
-| `lport install` | 安装或升级（已安装时直接升级并重启服务） |
-| `lport uninstall [--purge]` | 卸载服务，`--purge` 同时删除配置 |
-| `lport passwd [新密码]` | 重置管理员密码（不填则随机生成） |
-| `lport list` | 列出转发规则及运行状态 |
-| `lport add [--proto tcp\|udp\|both] [--name 名称] 端口 目标:端口` | 添加转发规则，如 `lport add 8443 10.0.0.2:443` |
-| `lport remove 规则名\|ID\|端口 ...` | 删除转发规则 |
-| `lport probe [规则名\|端口 ...]` | 命令行检测规则连通性，有失败时退出码为 1 |
-| `lport detect` | 检测系统环境与依赖工具 |
-| `lport serve` | 前台运行（调试用） |
+| `lport install` | Install or upgrade (an existing install is upgraded and its service restarted) |
+| `lport uninstall [--purge]` | Remove the service; `--purge` also deletes the configuration |
+| `lport passwd [new-password]` | Reset the admin password (random if omitted) |
+| `lport list` | List rules and their status |
+| `lport add [--proto tcp\|udp\|both] [--name NAME] PORT TARGET:PORT` | Add a rule, e.g. `lport add 8443 10.0.0.2:443` |
+| `lport remove NAME\|ID\|PORT ...` | Delete rules |
+| `lport probe [NAME\|PORT ...]` | Probe rule connectivity; exits with status 1 if any check fails |
+| `lport detect` | Inspect the system environment and dependencies |
+| `lport serve` | Run in the foreground (for debugging) |
 
-所有命令都支持 `--config` 指定配置文件，默认 `/etc/lport/config.yaml`。
+Every command accepts `--config` to choose the configuration file (default `/etc/lport/config.yaml`).
 
-`add` / `remove` 与 Web 界面使用相同的校验（端口冲突、目标地址等）：服务运行中时立即生效，否则写入配置文件，服务启动后生效。
+`add` / `remove` run the same validation as the web UI (port conflicts, target address, and so on). If the service is running, changes take effect immediately; otherwise they are written to the configuration file and applied when the service starts.
 
-### 配置文件
+### Configuration file
 
 ```yaml
-listen: 0.0.0.0:8080      # 管理面板地址
+listen: 0.0.0.0:8080      # admin panel address
 backend: nftables         # nftables | iptables | socat
 admin:
   username: admin
-  password: ""            # 可填明文，启动时自动转为 password_hash
+  password: ""            # plain text allowed; converted to password_hash on startup
 rules:
   - name: web
     proto: tcp            # tcp | udp | both
@@ -74,25 +78,25 @@ rules:
     enabled: true
 ```
 
-手动修改后执行 `systemctl restart lport`（Alpine：`rc-service lport restart`）生效。
+After editing by hand, run `systemctl restart lport` (Alpine: `rc-service lport restart`) to apply.
 
-### 转发工具对比
+### Backend comparison
 
 | | nftables | iptables | socat |
 |---|---|---|---|
-| 性能 | 最高（内核转发，map 查找） | 高（内核转发） | 较低（用户态） |
-| 目标为本机 127.0.0.1 | 不支持 | 不支持 | 支持 |
-| 适用 | 新系统首选 | 老系统（如 CentOS 7） | 转发到本机端口 |
+| Performance | Highest (in-kernel, map lookup) | High (in-kernel) | Lower (user space) |
+| Target on local 127.0.0.1 | Not supported | Not supported | Supported |
+| Best for | Modern systems | Older systems (e.g. CentOS 7) | Forwarding to local ports |
 
-## 从源码构建
+## Building from source
 
-需要 Go 与 Node.js：
+Requires Go and Node.js:
 
 ```sh
-scripts/build.sh                # 编译全部架构到 release/
-scripts/build.sh amd64 arm64    # 只编译指定架构
-scripts/deploy.sh root@host     # 编译并部署到远程服务器
-scripts/deploy.sh -p 2222 root@host  # 指定 SSH 端口
+scripts/build.sh                     # build all architectures into release/
+scripts/build.sh amd64 arm64         # build selected architectures only
+scripts/deploy.sh root@host          # build and deploy to a remote server
+scripts/deploy.sh -p 2222 root@host  # use a custom SSH port
 ```
 
-推送 `v*` tag（如 `git tag v1.0.0 && git push origin v1.0.0`）会由 GitHub Actions 自动测试、编译并发布 Release。
+Pushing a `v*` tag (e.g. `git tag v1.0.0 && git push origin v1.0.0`) makes GitHub Actions test, build, and publish a release.

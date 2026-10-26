@@ -74,7 +74,7 @@ for a in "${ARCHES[@]}"; do
   rm -rf "$stage" && mkdir -p "$stage"
   CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" GOARM="$goarm" \
     go build -trimpath -ldflags "$LDFLAGS" -o "$stage/lport" ./cmd/lport
-  cp README.md "$stage/"
+  cp README.md README.zh-CN.md "$stage/"
   tar -C "$OUT" -czf "$OUT/$name.tar.gz" "$name"
   rm -rf "$stage"
 done
