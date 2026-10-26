@@ -79,6 +79,23 @@ rules:
 
 After editing by hand, run `systemctl restart lport` (Alpine: `rc-service lport restart`) to apply.
 
+### Behind a reverse proxy
+
+The panel can be served from the site root or a subpath. Example for nginx under `/lport/`, with lport listening on `127.0.0.1:8080`:
+
+```nginx
+location = /lport { return 301 /lport/; }
+location ^~ /lport/ {                       # ^~ keeps regex locations (e.g. for .js/.css) from taking over
+    proxy_pass http://127.0.0.1:8080/;      # the trailing / strips the /lport prefix
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 300s;                # installing packages from the Overview page can take a while
+}
+```
+
+lport trusts `X-Forwarded-For` (for the login rate limit) and `X-Forwarded-Proto` (to mark the session cookie `Secure`) only from loopback addresses, i.e. a proxy on the same host. Bind the panel to `127.0.0.1` so it is reachable only through the proxy.
+
 ### Backend comparison
 
 | | nftables | iptables | socat |

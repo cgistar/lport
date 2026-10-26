@@ -79,6 +79,23 @@ rules:
 
 手动修改后执行 `systemctl restart lport`（Alpine：`rc-service lport restart`）生效。
 
+### 反向代理
+
+面板可以部署在站点根路径或子路径下。以 nginx 挂在 `/lport/`、lport 监听 `127.0.0.1:8080` 为例：
+
+```nginx
+location = /lport { return 301 /lport/; }
+location ^~ /lport/ {                       # ^~ 避免 .js/.css 等正则 location 抢先匹配
+    proxy_pass http://127.0.0.1:8080/;      # 末尾的 / 会去掉 /lport 前缀
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 300s;                # 在概览页安装依赖可能耗时较长
+}
+```
+
+lport 只信任来自回环地址（即同机代理）的 `X-Forwarded-For`（用于登录失败限制）与 `X-Forwarded-Proto`（用于给会话 Cookie 加 `Secure`）。建议面板只监听 `127.0.0.1`，仅通过代理访问。
+
 ### 转发工具对比
 
 | | nftables | iptables | socat |

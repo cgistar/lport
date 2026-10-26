@@ -95,6 +95,7 @@ export interface InstallResult {
 
 export class UnauthorizedError extends Error {}
 
+// 接口地址用相对路径，面板经反向代理挂在子路径（如 /lport/）下时同样可用
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
@@ -109,7 +110,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   } catch {
     /* 非 JSON 响应 */
   }
-  if (res.status === 401 && url !== '/api/login') {
+  if (res.status === 401 && url !== 'api/login') {
     window.dispatchEvent(new Event('lport:unauthorized'))
     throw new UnauthorizedError(tr('api.unauthorized'))
   }
@@ -122,27 +123,27 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 
 export const api = {
   login: (username: string, password: string) =>
-    request<{ username: string }>('POST', '/api/login', { username, password }),
-  logout: () => request('POST', '/api/logout'),
-  me: () => request<{ username: string }>('GET', '/api/me'),
-  system: () => request<SystemInfo>('GET', '/api/system'),
-  install: (tools: string[]) => request<InstallResult>('POST', '/api/system/install', { tools }),
-  settings: () => request<Settings>('GET', '/api/settings'),
-  setBackend: (backend: Backend) => request<Settings>('PUT', '/api/settings', { backend }),
+    request<{ username: string }>('POST', 'api/login', { username, password }),
+  logout: () => request('POST', 'api/logout'),
+  me: () => request<{ username: string }>('GET', 'api/me'),
+  system: () => request<SystemInfo>('GET', 'api/system'),
+  install: (tools: string[]) => request<InstallResult>('POST', 'api/system/install', { tools }),
+  settings: () => request<Settings>('GET', 'api/settings'),
+  setBackend: (backend: Backend) => request<Settings>('PUT', 'api/settings', { backend }),
   changePassword: (old_password: string, new_password: string) =>
-    request('PUT', '/api/settings/password', { old_password, new_password }),
-  rules: () => request<Rule[]>('GET', '/api/rules'),
-  createRule: (r: Partial<Rule>) => request<Rule>('POST', '/api/rules', r),
-  updateRule: (id: string, r: Partial<Rule>) => request<Rule>('PUT', `/api/rules/${id}`, r),
-  deleteRule: (id: string) => request('DELETE', `/api/rules/${id}`),
-  toggleRule: (id: string, enabled: boolean) => request('POST', `/api/rules/${id}/toggle`, { enabled }),
-  probeRule: (id: string) => request<ProbeResult>('POST', `/api/rules/${id}/probe`),
+    request('PUT', 'api/settings/password', { old_password, new_password }),
+  rules: () => request<Rule[]>('GET', 'api/rules'),
+  createRule: (r: Partial<Rule>) => request<Rule>('POST', 'api/rules', r),
+  updateRule: (id: string, r: Partial<Rule>) => request<Rule>('PUT', `api/rules/${id}`, r),
+  deleteRule: (id: string) => request('DELETE', `api/rules/${id}`),
+  toggleRule: (id: string, enabled: boolean) => request('POST', `api/rules/${id}/toggle`, { enabled }),
+  probeRule: (id: string) => request<ProbeResult>('POST', `api/rules/${id}/probe`),
   checkPort: (proto: Proto, port: number, exclude?: string) =>
     request<{ available: boolean; conflicts: Conflict[] }>(
       'GET',
-      `/api/ports/check?proto=${proto}&port=${port}&exclude=${encodeURIComponent(exclude ?? '')}`,
+      `api/ports/check?proto=${proto}&port=${port}&exclude=${encodeURIComponent(exclude ?? '')}`,
     ),
-  listening: () => request<Listener[]>('GET', '/api/ports/listening'),
+  listening: () => request<Listener[]>('GET', 'api/ports/listening'),
 }
 
 

@@ -124,10 +124,37 @@ func readJSON(r *http.Request, v any) error {
 	return nil
 }
 
+// fromTrustedProxy 请求是否来自本机反向代理（如同机部署的 nginx）。只信任回环地址发来的
+// X-Forwarded-* 头，其它来源可以任意伪造这些头。
+func fromTrustedProxy(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	ip := net.ParseIP(host)
+	return err == nil && ip != nil && ip.IsLoopback()
+}
+
+// clientIP 返回客户端 IP，用于登录失败限制。经本机反向代理时取 X-Forwarded-For 的最后一项
+// （代理追加的、实际连接它的地址，前面的项可由客户端伪造），其次 X-Real-IP。
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if !fromTrustedProxy(r) {
+		return host
+	}
+	if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
+		parts := strings.Split(xff[len(xff)-1], ",")
+		if ip := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(ip) != nil {
+			return ip
+		}
+	}
+	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); net.ParseIP(ip) != nil {
+		return ip
 	}
 	return host
+}
+
+// isHTTPS 浏览器到面板的连接是否为 HTTPS，包括由本机反向代理终止 TLS 的情况。
+func isHTTPS(r *http.Request) bool {
+	return r.TLS != nil || fromTrustedProxy(r) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
