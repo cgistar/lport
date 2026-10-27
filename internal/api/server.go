@@ -57,11 +57,12 @@ func SocketPath(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "lport.sock")
 }
 
-// LocalHandler 供控制套接字使用的规则接口（lport add/remove/list），由文件权限保证访问控制，无需登录。
+// LocalHandler 供控制套接字使用的规则接口（lport add/edit/remove/list），由文件权限保证访问控制，无需登录。
 func (s *Server) LocalHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /rules", s.listRules)
 	mux.HandleFunc("POST /rules", s.createRule)
+	mux.HandleFunc("PUT /rules/{id}", s.updateRule)
 	mux.HandleFunc("DELETE /rules/{id}", s.deleteRule)
 	return mux
 }

@@ -49,9 +49,11 @@ When it finishes, open `http://<server-ip>:8080` and log in.
 |---|---|
 | `lport install` | Install or upgrade (an existing install is upgraded and its service restarted) |
 | `lport uninstall [--purge]` | Remove the service; `--purge` also deletes the configuration |
+| `lport start` / `stop` / `restart` | Start, stop or restart the installed service |
 | `lport passwd [new-password]` | Reset the admin password (random if omitted) |
 | `lport list` | List rules and their status |
 | `lport add [--proto tcp\|udp\|both] [--name NAME] PORT TARGET:PORT` | Add a rule, e.g. `lport add 8443 10.0.0.2:443` |
+| `lport edit [--port PORT] [--target HOST:PORT] [--proto ...] [--name NAME] [--enable\|--disable] NAME\|ID\|PORT` | Modify a rule, changing only the given fields, e.g. `lport edit --port 9443 8443` |
 | `lport remove NAME\|ID\|PORT ...` | Delete rules |
 | `lport probe [NAME\|PORT ...]` | Probe rule connectivity; exits with status 1 if any check fails |
 | `lport detect` | Inspect the system environment and dependencies |

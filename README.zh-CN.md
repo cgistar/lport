@@ -49,9 +49,11 @@ cd lport-*-linux-amd64
 |---|---|
 | `lport install` | 安装或升级（已安装时直接升级并重启服务） |
 | `lport uninstall [--purge]` | 卸载服务，`--purge` 同时删除配置 |
+| `lport start` / `stop` / `restart` | 启动 / 停止 / 重启已安装的系统服务 |
 | `lport passwd [新密码]` | 重置管理员密码（不填则随机生成） |
 | `lport list` | 列出转发规则及运行状态 |
 | `lport add [--proto tcp\|udp\|both] [--name 名称] 端口 目标:端口` | 添加转发规则，如 `lport add 8443 10.0.0.2:443` |
+| `lport edit [--port 端口] [--target 目标:端口] [--proto ...] [--name 名称] [--enable\|--disable] 规则名\|ID\|端口` | 修改转发规则，只改指定的项，如 `lport edit --port 9443 8443` |
 | `lport remove 规则名\|ID\|端口 ...` | 删除转发规则 |
 | `lport probe [规则名\|端口 ...]` | 命令行检测规则连通性，有失败时退出码为 1 |
 | `lport detect` | 检测系统环境与依赖工具 |

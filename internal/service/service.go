@@ -154,6 +154,16 @@ func Running() bool {
 	return false
 }
 
+func Start() error {
+	switch InitSystem() {
+	case "systemd":
+		return run("systemctl", "start", "lport")
+	case "openrc":
+		return run("rc-service", "lport", "start")
+	}
+	return nil
+}
+
 func Stop() error {
 	switch InitSystem() {
 	case "systemd":

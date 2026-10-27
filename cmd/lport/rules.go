@@ -27,6 +27,7 @@ import (
 type ruleOps interface {
 	List() ([]manager.RuleView, error)
 	Create(r model.Rule) (model.Rule, error)
+	Update(id string, r model.Rule) (model.Rule, error)
 	Delete(id string) error
 	Online() bool
 }
@@ -111,6 +112,11 @@ func (c *ctlClient) Create(r model.Rule) (model.Rule, error) {
 	return out, c.do(http.MethodPost, "/rules", r, &out)
 }
 
+func (c *ctlClient) Update(id string, r model.Rule) (model.Rule, error) {
+	var out model.Rule
+	return out, c.do(http.MethodPut, "/rules/"+url.PathEscape(id), r, &out)
+}
+
 func (c *ctlClient) Delete(id string) error {
 	return c.do(http.MethodDelete, "/rules/"+url.PathEscape(id), nil, nil)
 }
@@ -131,7 +137,10 @@ func (o offlineRules) List() ([]manager.RuleView, error) {
 }
 
 func (o offlineRules) Create(r model.Rule) (model.Rule, error) { return o.mgr.Create(r) }
-func (o offlineRules) Delete(id string) error                  { return o.mgr.Delete(id) }
+func (o offlineRules) Update(id string, r model.Rule) (model.Rule, error) {
+	return o.mgr.Update(id, r)
+}
+func (o offlineRules) Delete(id string) error { return o.mgr.Delete(id) }
 
 // parseInterspersed 解析参数，允许选项出现在位置参数之后（如 lport add 8080 1.2.3.4:80 --proto udp）。
 func parseInterspersed(fs *flag.FlagSet, args []string) []string {
@@ -221,6 +230,82 @@ func cmdAdd(args []string) error {
 	fmt.Printf("已添加规则 %s (%s): %s :%d → %s\n", r.Name, r.ID, r.Proto, r.ListenPort, r.Target)
 	if !ops.Online() {
 		fmt.Println("服务未运行，规则已写入配置，启动服务后生效")
+	}
+	return nil
+}
+
+func cmdEdit(args []string) error {
+	fs := flag.NewFlagSet("edit", flag.ExitOnError)
+	cfgPath := fs.String("config", config.DefaultPath, "配置文件路径")
+	port := fs.Int("port", 0, "新的监听端口")
+	target := fs.String("target", "", "新的目标地址:端口")
+	proto := fs.String("proto", "", "协议 tcp | udp | both")
+	name := fs.String("name", "", "规则名称")
+	remark := fs.String("remark", "", "备注")
+	enable := fs.Bool("enable", false, "启用规则")
+	disable := fs.Bool("disable", false, "停用规则")
+	keys := parseInterspersed(fs, args)
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	delete(set, "config")
+	if len(keys) != 1 || len(set) == 0 {
+		return errors.New("用法: lport edit [--port PORT] [--target HOST:PORT] [--proto tcp|udp|both] [--name NAME] [--remark TEXT] [--enable|--disable] 规则名|ID|端口")
+	}
+	if *enable && *disable {
+		return errors.New("--enable 与 --disable 不能同时使用")
+	}
+	ops, err := openRules(*cfgPath)
+	if err != nil {
+		return err
+	}
+	views, err := ops.List()
+	if err != nil {
+		return err
+	}
+	rules := make([]model.Rule, len(views))
+	for i, v := range views {
+		rules[i] = v.Rule
+	}
+	selected, err := selectRules(rules, keys)
+	if err != nil {
+		return err
+	}
+	if len(selected) > 1 {
+		return fmt.Errorf("%s 匹配到 %d 条规则，请改用 ID 指定（lport list 查看）", keys[0], len(selected))
+	}
+	r := selected[0]
+	if set["port"] {
+		// 沿用默认名称的规则随端口一起改名
+		if !set["name"] && r.Name == "rule-"+strconv.Itoa(r.ListenPort) {
+			r.Name = "rule-" + strconv.Itoa(*port)
+		}
+		r.ListenPort = *port
+	}
+	if set["target"] {
+		r.Target = *target
+	}
+	if set["proto"] {
+		r.Proto = *proto
+	}
+	if set["name"] {
+		r.Name = *name
+	}
+	if set["remark"] {
+		r.Remark = *remark
+	}
+	if *enable {
+		r.Enabled = true
+	}
+	if *disable {
+		r.Enabled = false
+	}
+	r, err = ops.Update(r.ID, r)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("已修改规则 %s (%s): %s :%d → %s\n", r.Name, r.ID, r.Proto, r.ListenPort, r.Target)
+	if !ops.Online() {
+		fmt.Println("服务未运行，已写入配置，启动服务后生效")
 	}
 	return nil
 }

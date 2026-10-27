@@ -33,10 +33,14 @@ const usage = `lport - 端口转发管理工具 (%s)
   lport install   [--config PATH] [--listen ADDR] [--backend NAME] [-y]
                                                     安装程序与系统服务（交互式；-y 或无终端时使用默认值）
   lport uninstall [--config PATH] [--purge]         卸载系统服务，--purge 同时删除配置
+  lport start | stop | restart                      启动 / 停止 / 重启系统服务
   lport passwd    [--config PATH] [新密码]          重置管理员密码（不填则随机生成）
   lport list      [--config PATH]                   列出转发规则
   lport add       [--config PATH] [--proto tcp|udp|both] [--name NAME] [--remark TEXT] [--disabled]
                   监听端口 目标地址:端口             添加转发规则（服务运行中时立即生效）
+  lport edit      [--config PATH] [--port PORT] [--target HOST:PORT] [--proto tcp|udp|both]
+                  [--name NAME] [--remark TEXT] [--enable|--disable]
+                  规则名|ID|端口                     修改转发规则（只改指定的项）
   lport remove    [--config PATH] 规则名|ID|端口 ...  删除转发规则
   lport probe     [--config PATH] [规则名|ID|端口 ...] 检测规则连通性（本机经转发 / 直连目标）
   lport detect                                      检测系统环境与依赖工具
@@ -60,12 +64,16 @@ func main() {
 		err = cmdInstall(args)
 	case "uninstall":
 		err = cmdUninstall(args)
+	case "start", "stop", "restart":
+		err = cmdService(cmd)
 	case "passwd":
 		err = cmdPasswd(args)
 	case "list", "ls":
 		err = cmdList(args)
 	case "add":
 		err = cmdAdd(args)
+	case "edit":
+		err = cmdEdit(args)
 	case "remove", "rm":
 		err = cmdRemove(args)
 	case "probe":
@@ -306,6 +314,37 @@ func cmdUninstall(args []string) error {
 		return err
 	}
 	fmt.Println("已卸载")
+	return nil
+}
+
+// cmdService 通过 systemd / OpenRC 启动、停止或重启已安装的服务。
+func cmdService(action string) error {
+	if err := requireRoot(); err != nil {
+		return err
+	}
+	if service.InitSystem() == "" {
+		return errors.New("未检测到 systemd 或 OpenRC")
+	}
+	if !service.Installed() {
+		return errors.New("服务未安装，请先执行 lport install")
+	}
+	var err error
+	switch action {
+	case "start":
+		err = service.Start()
+	case "stop":
+		err = service.Stop()
+	case "restart":
+		err = service.Restart()
+	}
+	if err != nil {
+		return err
+	}
+	if service.Running() {
+		fmt.Println("服务运行中")
+	} else {
+		fmt.Println("服务已停止")
+	}
 	return nil
 }
 
