@@ -272,3 +272,63 @@ func isTimeout(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
 }
+
+// 客户端 RST 断开而上游保持连接时，代理须关闭两端，不能留下滞留的连接
+func TestBuiltinClientResetReleasesUpstream(t *testing.T) {
+	up, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { up.Close() })
+	upClosed := make(chan struct{})
+	go func() {
+		c, err := up.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		// 上游只读不写也不主动关闭；读到 EOF 后仍保持连接，模拟忽略半关闭的服务
+		io.Copy(io.Discard, c)
+		c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if _, err := c.Write([]byte("late")); err == nil {
+			time.Sleep(100 * time.Millisecond)
+			if _, err := c.Write([]byte("late")); err != nil {
+				close(upClosed)
+			}
+		}
+	}()
+	lp := freePort(t)
+	b := NewBuiltin()
+	t.Cleanup(func() { _ = b.Cleanup() })
+	if err := b.Sync([]model.Rule{{ID: "r", Proto: "tcp", ListenPort: lp, Target: up.Addr().String(), Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("tcp4", "127.0.0.1:"+strconv.Itoa(lp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Write([]byte("hi"))
+	time.Sleep(100 * time.Millisecond)
+	c.(*net.TCPConn).SetLinger(0) // Close 时发送 RST
+	c.Close()
+
+	f := b.fwds["r"][0]
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		f.mu.Lock()
+		n := len(f.conns)
+		f.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("客户端 RST 后仍有 %d 个连接未释放", n)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	select {
+	case <-upClosed:
+	case <-time.After(3 * time.Second):
+		t.Error("上游连接未被关闭")
+	}
+}

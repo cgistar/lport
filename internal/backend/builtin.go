@@ -297,15 +297,17 @@ func (f *forwarder) handleTCP(c net.Conn) {
 	<-done
 }
 
-// pipe 把 src 的数据拷贝到 dst，src 读完后半关闭 dst 的写方向，保留另一方向继续传输。
+// pipe 把 src 的数据拷贝到 dst。src 正常读完（对端 FIN）时半关闭 dst 的写方向，保留另一方向继续传输；
+// 出错（如对端 RST）时关闭两端，唤醒阻塞在另一方向的拷贝，否则上游不关闭时连接会一直滞留。
 // TCP 之间的 io.Copy 在 Linux 上走 splice，数据不经过用户态。
 func pipe(dst, src net.Conn) {
-	_, _ = io.Copy(dst, src)
-	if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+	_, err := io.Copy(dst, src)
+	if cw, ok := dst.(interface{ CloseWrite() error }); ok && err == nil {
 		_ = cw.CloseWrite()
-	} else {
-		_ = dst.Close()
+		return
 	}
+	_ = dst.Close()
+	_ = src.Close()
 }
 
 func (f *forwarder) serveUDP() {
@@ -327,20 +329,21 @@ func (f *forwarder) serveUDP() {
 			delay = 0
 			f.setErr("")
 		}
-		s := f.udpSession(addr)
-		if s == nil {
-			continue
+		if s := f.udpSession(addr); s != nil {
+			_, _ = s.conn.Write(buf[:n])
 		}
-		s.last.Store(time.Now().UnixNano())
-		_, _ = s.conn.Write(buf[:n])
 	}
 }
 
-// udpSession 返回客户端对应的会话，不存在时连接目标新建；失败或超过上限时返回 nil（丢弃该包）。
+// udpSession 返回客户端对应的会话并续期，不存在时连接目标新建；失败或超过上限时返回 nil（丢弃该包）。
+// 续期与 udpReply 的过期判断在同一把锁下进行：会话要么已续期不会被回收，要么已从表中删除而新建。
 func (f *forwarder) udpSession(addr net.Addr) *udpSession {
 	key := addr.String()
 	f.mu.Lock()
 	s, ok := f.sessions[key]
+	if ok {
+		s.last.Store(time.Now().UnixNano())
+	}
 	full := len(f.sessions) >= maxUDPSessions
 	f.mu.Unlock()
 	if ok {
@@ -359,6 +362,7 @@ func (f *forwarder) udpSession(addr net.Addr) *udpSession {
 		return nil
 	}
 	s = &udpSession{conn: up}
+	s.last.Store(time.Now().UnixNano())
 	f.mu.Lock()
 	f.sessions[key] = s
 	f.mu.Unlock()
@@ -372,7 +376,9 @@ func (f *forwarder) udpReply(key string, addr net.Addr, s *udpSession) {
 	defer f.wg.Done()
 	defer func() {
 		f.mu.Lock()
-		delete(f.sessions, key)
+		if f.sessions[key] == s {
+			delete(f.sessions, key)
+		}
 		f.mu.Unlock()
 		f.untrack(s.conn)
 	}()
@@ -382,7 +388,7 @@ func (f *forwarder) udpReply(key string, addr net.Addr, s *udpSession) {
 		n, err := s.conn.Read(buf)
 		if err != nil {
 			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() && time.Since(time.Unix(0, s.last.Load())) < udpIdle {
+			if errors.As(err, &ne) && ne.Timeout() && !f.expire(key, s) {
 				continue // 客户端仍在发送，只是目标暂时没有回包
 			}
 			return
@@ -391,4 +397,17 @@ func (f *forwarder) udpReply(key string, addr net.Addr, s *udpSession) {
 			return
 		}
 	}
+}
+
+// expire 在锁内检查会话是否空闲超时，超时则从表中删除并返回 true。
+func (f *forwarder) expire(key string, s *udpSession) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if time.Since(time.Unix(0, s.last.Load())) < udpIdle {
+		return false
+	}
+	if f.sessions[key] == s {
+		delete(f.sessions, key)
+	}
+	return true
 }

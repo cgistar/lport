@@ -67,13 +67,20 @@ func download(url, binary string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("下载失败: HTTP %d", resp.StatusCode)
 	}
-	gz, err := gzip.NewReader(resp.Body)
+	return extract(resp.Body, binary, downloadDir)
+}
+
+// extract 从 tar.gz 流中取出名为 binary 的文件安装到 dir。先写临时文件，读完整个 gzip 流
+// （完成 CRC 与长度校验）后才改名替换，损坏或截断的发布包不会覆盖已有版本。
+func extract(r io.Reader, binary, dir string) (string, error) {
+	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return "", fmt.Errorf("解压失败: %w", err)
 	}
 	tr := tar.NewReader(gz)
+	var h *tar.Header
 	for {
-		h, err := tr.Next()
+		h, err = tr.Next()
 		if errors.Is(err, io.EOF) {
 			return "", fmt.Errorf("发布包中没有 %s", binary)
 		}
@@ -81,35 +88,35 @@ func download(url, binary string) (string, error) {
 			return "", fmt.Errorf("解压失败: %w", err)
 		}
 		if h.Typeflag == tar.TypeReg && path.Base(h.Name) == binary {
-			return installBinary(io.LimitReader(tr, maxBinarySize+1), binary)
+			break
 		}
 	}
-}
-
-func installBinary(r io.Reader, binary string) (string, error) {
-	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
+	if h.Size > maxBinarySize {
+		return "", fmt.Errorf("%s 超过大小上限", binary)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	f, err := os.CreateTemp(downloadDir, "."+binary+"-*")
+	f, err := os.CreateTemp(dir, "."+binary+"-*")
 	if err != nil {
 		return "", err
 	}
 	tmp := f.Name()
 	defer os.Remove(tmp)
-	n, err := io.Copy(f, r)
+	_, err = io.Copy(f, tr)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
 		return "", fmt.Errorf("写入失败: %w", err)
 	}
-	if n > maxBinarySize {
-		return "", fmt.Errorf("%s 超过大小上限", binary)
+	if _, err := io.Copy(io.Discard, gz); err != nil {
+		return "", fmt.Errorf("解压失败: %w", err)
 	}
 	if err := os.Chmod(tmp, 0o755); err != nil {
 		return "", err
 	}
-	dst := filepath.Join(downloadDir, binary)
+	dst := filepath.Join(dir, binary)
 	if err := os.Rename(tmp, dst); err != nil {
 		return "", err
 	}
