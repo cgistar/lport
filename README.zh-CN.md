@@ -17,6 +17,28 @@ Linux 端口转发管理工具：通过 Web 界面把本机 TCP/UDP 端口转发
 
 ## 安装
 
+### 一键安装（推荐）
+
+在服务器上以 root 运行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cgistar/lport/main/scripts/install.sh | sh
+# 没有 curl 时（如 Alpine）：
+wget -qO- https://raw.githubusercontent.com/cgistar/lport/main/scripts/install.sh | sh
+```
+
+脚本会识别架构、下载最新版并校验 sha256，然后安装为系统服务。首次安装使用内置转发（builtin）、管理面板监听 `0.0.0.0:8080`、随机生成管理员密码，完成后会提示面板地址和密码。已安装时只升级程序，保留原有配置。
+
+可用环境变量修改默认值（`LPORT_LISTEN`、`LPORT_BACKEND` 仅首次安装生效）：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cgistar/lport/main/scripts/install.sh | LPORT_LISTEN=127.0.0.1:8080 LPORT_BACKEND=nftables sh
+```
+
+`LPORT_VERSION=v0.2.0` 可安装指定版本。
+
+### 手动安装
+
 从 [Releases](https://github.com/cgistar/lport/releases) 下载对应架构的压缩包，解压后以 root 运行：
 
 ```sh

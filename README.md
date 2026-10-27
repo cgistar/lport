@@ -17,6 +17,28 @@ Port forwarding manager for Linux: forward local TCP/UDP ports to any `IP/domain
 
 ## Installation
 
+### One-line install (recommended)
+
+Run as root on the server:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cgistar/lport/main/scripts/install.sh | sh
+# or, without curl (e.g. Alpine):
+wget -qO- https://raw.githubusercontent.com/cgistar/lport/main/scripts/install.sh | sh
+```
+
+The script detects the architecture, downloads the latest release, verifies its sha256, and installs it as a system service. A fresh install uses the built-in backend, serves the panel on `0.0.0.0:8080`, and generates a random admin password; the panel address and password are printed at the end. If lport is already installed, it upgrades the binary and keeps the existing configuration.
+
+Override the defaults with environment variables (`LPORT_LISTEN` and `LPORT_BACKEND` apply to fresh installs only):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cgistar/lport/main/scripts/install.sh | LPORT_LISTEN=127.0.0.1:8080 LPORT_BACKEND=nftables sh
+```
+
+`LPORT_VERSION=v0.2.0` installs a specific version.
+
+### Manual install
+
 Download the archive for your architecture from [Releases](https://github.com/cgistar/lport/releases), extract it, and run as root:
 
 ```sh
