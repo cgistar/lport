@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -117,8 +118,13 @@ func (s *Store) normalize(res *LoadResult) error {
 		res.BackendAuto = true
 		res.Changed = true
 	}
+	if c.Backend == model.LegacyBackendSocat {
+		log.Printf("socat 后端已移除，改用内置转发（builtin）")
+		c.Backend = model.BackendBuiltin
+		res.Changed = true
+	}
 	if !model.ValidBackend(c.Backend) {
-		return fmt.Errorf("backend 必须是 socat / realm / iptables / nftables，当前为 %q", c.Backend)
+		return fmt.Errorf("backend 必须是 builtin / realm / iptables / nftables，当前为 %q", c.Backend)
 	}
 	if c.Admin.Username == "" {
 		c.Admin.Username = "admin"
@@ -189,10 +195,10 @@ var (
 )
 
 // autoBackend 为未指定后端的配置选择默认值：root 下优先 nftables，其次 iptables，
-// 且需所有已有规则都适用于该后端；否则使用 socat。
+// 且需所有已有规则都适用于该后端；否则使用内置转发。
 func autoBackend(rules []model.Rule) string {
 	if !isRoot() {
-		return model.BackendSocat
+		return model.BackendBuiltin
 	}
 	for _, b := range []string{model.BackendNftables, model.BackendIptables} {
 		if !toolInstalled(b) {
@@ -209,7 +215,7 @@ func autoBackend(rules []model.Rule) string {
 			return b
 		}
 	}
-	return model.BackendSocat
+	return model.BackendBuiltin
 }
 
 // CheckRuleConflicts 检查规则之间是否存在同协议同端口。

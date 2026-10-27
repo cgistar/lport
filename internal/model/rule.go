@@ -16,17 +16,20 @@ const (
 )
 
 const (
-	BackendSocat    = "socat"
+	BackendBuiltin  = "builtin"
+	BackendRealm    = "realm"
 	BackendIptables = "iptables"
 	BackendNftables = "nftables"
-	BackendRealm    = "realm"
+
+	// LegacyBackendSocat 已移除的 socat 后端，加载旧配置时迁移为 builtin。
+	LegacyBackendSocat = "socat"
 )
 
-var Backends = []string{BackendSocat, BackendRealm, BackendIptables, BackendNftables}
+var Backends = []string{BackendBuiltin, BackendRealm, BackendIptables, BackendNftables}
 
-// UserSpace 判断是否为用户态进程后端：自行解析域名，可转发到回环地址。
+// UserSpace 判断是否为用户态后端（内置转发 / realm）：自行解析域名，可转发到回环地址。
 func UserSpace(backend string) bool {
-	return backend == BackendSocat || backend == BackendRealm
+	return backend == BackendBuiltin || backend == BackendRealm
 }
 
 func ValidBackend(b string) bool {
@@ -100,7 +103,7 @@ func (r *Rule) Validate(backend string) error {
 	}
 	ip := net.ParseIP(host)
 	if ip != nil && ip.To4() != nil {
-		// 统一为点分十进制，避免 ::ffff:1.2.3.4 这类 IPv4 映射地址原样进入 iptables / nft / socat / realm 参数
+		// 统一为点分十进制，避免 ::ffff:1.2.3.4 这类 IPv4 映射地址原样进入 iptables / nft / realm 参数
 		host = ip.To4().String()
 		r.Target = net.JoinHostPort(host, strconv.Itoa(port))
 	}
@@ -118,7 +121,7 @@ func (r *Rule) Validate(backend string) error {
 		return nil
 	}
 	if ip.IsLoopback() {
-		return fmt.Errorf("%s 后端不能转发到回环地址 %s，请改用 socat 或 realm 后端", backend, host)
+		return fmt.Errorf("%s 后端不能转发到回环地址 %s，请改用 builtin 或 realm 后端", backend, host)
 	}
 	if ip.IsUnspecified() {
 		return fmt.Errorf("目标地址不能是 0.0.0.0")

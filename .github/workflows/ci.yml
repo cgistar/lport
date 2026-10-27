@@ -1,4 +1,4 @@
-# 持续集成：单元测试 + 真实内核上的集成测试（root、网络命名空间、nftables/iptables/socat）。
+# 持续集成：单元测试 + 真实内核上的集成测试（root、网络命名空间、nftables/iptables/realm/内置转发）。
 # 推送 main、提交 PR 时运行；发布流程（release.yml）也会先调用本工作流。
 name: ci
 
@@ -54,13 +54,16 @@ jobs:
           go-version-file: go.mod
 
       - name: 安装转发工具
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends socat nftables iptables
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables iptables
+          curl -fsSL https://github.com/zhboner/realm/releases/latest/download/realm-x86_64-unknown-linux-musl.tar.gz | sudo tar -xz -C /usr/local/bin realm
 
       - name: 环境信息
         run: |
           uname -r
           nft --version
           iptables --version
+          realm -v
           sudo iptables -S FORWARD
 
       # 以普通用户编译测试程序，再以 root 运行（测试需要创建网络命名空间、修改 nftables/iptables）

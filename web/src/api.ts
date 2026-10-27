@@ -1,7 +1,7 @@
 import { getLang, tr } from './i18n'
 
 export type Proto = 'tcp' | 'udp' | 'both'
-export type Backend = 'socat' | 'realm' | 'iptables' | 'nftables'
+export type Backend = 'builtin' | 'realm' | 'iptables' | 'nftables'
 
 export interface RuleStatus {
   state: 'running' | 'stopped' | 'error' | 'applied'
@@ -147,8 +147,9 @@ export const api = {
 }
 
 
-export const toolForBackend: Record<Backend, string> = {
-  socat: 'socat',
+// 后端依赖的外部工具；内置转发不依赖任何工具
+export const toolForBackend: Record<Backend, string | null> = {
+  builtin: null,
   realm: 'realm',
   iptables: 'iptables',
   nftables: 'nftables',

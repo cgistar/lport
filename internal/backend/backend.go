@@ -37,8 +37,8 @@ type Maintainer interface {
 
 func New(name string) (Backend, error) {
 	switch name {
-	case model.BackendSocat:
-		return NewSocat(), nil
+	case model.BackendBuiltin:
+		return NewBuiltin(), nil
 	case model.BackendRealm:
 		return NewRealm(), nil
 	case model.BackendIptables:

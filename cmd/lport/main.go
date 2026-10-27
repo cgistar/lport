@@ -189,7 +189,7 @@ func cmdInstall(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
 	cfgPath := fs.String("config", config.DefaultPath, "配置文件路径")
 	listen := fs.String("listen", "", "监听地址，如 0.0.0.0:8080")
-	backendFlag := fs.String("backend", "", "转发工具 nftables | iptables | socat | realm（默认交互选择）")
+	backendFlag := fs.String("backend", "", "转发工具 nftables | iptables | realm | builtin（默认交互选择）")
 	yes := fs.Bool("y", false, "非交互模式，全部使用默认值")
 	_ = fs.Parse(args)
 	if err := requireRoot(); err != nil {
@@ -226,7 +226,7 @@ func cmdInstall(args []string) error {
 	case *backendFlag != "":
 		backend = *backendFlag
 		if !model.ValidBackend(backend) {
-			return fmt.Errorf("--backend 必须是 nftables / iptables / socat / realm")
+			return fmt.Errorf("--backend 必须是 nftables / iptables / realm / builtin")
 		}
 	case res.BackendAuto && p.interactive:
 		backend = p.chooseBackend(store.Get().Rules)
@@ -282,7 +282,7 @@ func cmdInstall(args []string) error {
 
 // ensureTool 检查后端依赖的工具，缺失时询问（非交互模式直接）安装。
 func ensureTool(p *prompter, backend string) {
-	if sysinfo.ToolInstalled(backend) {
+	if backend == model.BackendBuiltin || sysinfo.ToolInstalled(backend) {
 		return
 	}
 	info := sysinfo.Detect()

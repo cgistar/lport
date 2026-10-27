@@ -39,7 +39,8 @@ function BackendCard() {
     api.system().then((s) => setTools(s.info.tools)).catch(() => {})
   }, [])
 
-  const installed = (b: Backend) => tools.find((tool) => tool.name === toolForBackend[b])?.installed ?? false
+  const installed = (b: Backend) =>
+    toolForBackend[b] === null || (tools.find((tool) => tool.name === toolForBackend[b])?.installed ?? false)
 
   const confirm = async () => {
     if (!pending) return

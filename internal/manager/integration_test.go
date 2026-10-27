@@ -15,13 +15,15 @@ import (
 )
 
 // TestIntegrationProbe 在真实转发上验证连通性检测：本机检测经转发路径，目标检测直连；
-// socat 后端下目标不可达时，本机检测须识别出「接受后立即关闭」而不是误报成功。
+// 用户态后端下目标不可达时，本机检测须识别出「接受后立即关闭」而不是误报成功。
 func TestIntegrationProbe(t *testing.T) {
 	testnet.Setup(t)
 	testnet.ForwardDrop(t)
-	for _, c := range []struct{ backend, tool string }{{"nftables", "nft"}, {"iptables", "iptables"}, {"socat", "socat"}} {
+	for _, c := range []struct{ backend, tool string }{{"nftables", "nft"}, {"iptables", "iptables"}, {"builtin", ""}, {"realm", "realm"}} {
 		t.Run(c.backend, func(t *testing.T) {
-			testnet.RequireTool(t, c.tool)
+			if c.tool != "" {
+				testnet.RequireTool(t, c.tool)
+			}
 			path := filepath.Join(t.TempDir(), "config.yaml")
 			cfg := fmt.Sprintf(`listen: 127.0.0.1:18999
 backend: %s
@@ -49,7 +51,7 @@ rules:
 			expect := func(id string, local, target string) {
 				t.Helper()
 				var res *ProbeResult
-				// socat 进程启动需要一点时间，最多等待 5 秒
+				// realm 进程启动需要一点时间，最多等待 5 秒
 				for deadline := time.Now().Add(5 * time.Second); ; {
 					res, err = m.Probe(id)
 					if err != nil {

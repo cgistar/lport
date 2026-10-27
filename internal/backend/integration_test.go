@@ -61,12 +61,14 @@ func TestIntegrationBackends(t *testing.T) {
 		{"nftables-map", "nft", func() Backend { return &Nftables{} }, true},
 		{"nftables-linear", "nft", func() Backend { return &Nftables{mode: nftModeLinear} }, true},
 		{"iptables", "iptables", func() Backend { return &Iptables{} }, true},
-		{"socat", "socat", func() Backend { return NewSocat() }, false},
+		{"builtin", "", func() Backend { return NewBuiltin() }, false},
 		{"realm", "realm", func() Backend { return NewRealm() }, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			testnet.RequireTool(t, c.tool)
+			if c.tool != "" {
+				testnet.RequireTool(t, c.tool)
+			}
 			stubDNS(t, map[string][]string{domainTarget: {testnet.TargetIP}})
 			b := c.new()
 			rules := itRules()
@@ -80,7 +82,7 @@ func TestIntegrationBackends(t *testing.T) {
 			if n, ok := b.(*Nftables); ok {
 				t.Logf("nftables 模式: %s", n.Mode())
 			}
-			waitSocat(t, b)
+			waitListen(t, b)
 
 			viaHost := testnet.Reply(testnet.TargetIP, testnet.HostTargetSide)
 			got, err := testnet.FromClient("tcp", 18080)
@@ -160,8 +162,8 @@ func TestIntegrationBackends(t *testing.T) {
 	}
 }
 
-// waitSocat 等待用户态转发进程开始监听测试端口。
-func waitSocat(t *testing.T, b Backend) {
+// waitListen 等待 realm 进程开始监听测试端口（内置转发在 Sync 返回时已在监听）。
+func waitListen(t *testing.T, b Backend) {
 	t.Helper()
 	if _, ok := b.(*Process); !ok {
 		return

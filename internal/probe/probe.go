@@ -33,7 +33,7 @@ func TCP(addr string, timeout time.Duration) Result {
 	return tcp(addr, timeout, 0)
 }
 
-// TCPHold 建立连接后再观察 hold 时长：用户态代理（socat / realm）会先接受连接再连目标，
+// TCPHold 建立连接后再观察 hold 时长：用户态代理（内置转发 / realm）会先接受连接再连目标，
 // 目标不可达时会立即关闭连接，仅看握手会误判为成功。
 func TCPHold(addr string, timeout, hold time.Duration) Result {
 	return tcp(addr, timeout, hold)

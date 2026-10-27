@@ -44,10 +44,10 @@ func TestFamilyAndPM(t *testing.T) {
 }
 
 func TestInstallCommand(t *testing.T) {
-	if got := InstallCommand("apk", []string{"socat", "nftables"}); got != "apk add --no-cache socat nftables" {
+	if got := InstallCommand("apk", []string{"iptables", "nftables"}); got != "apk add --no-cache iptables nftables" {
 		t.Error(got)
 	}
-	if got := InstallCommand("apt", []string{"socat"}); got != "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y socat" {
+	if got := InstallCommand("apt", []string{"nftables"}); got != "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y nftables" {
 		t.Error(got)
 	}
 	if got := InstallCommand("dnf", nil); got != "" {
@@ -60,11 +60,11 @@ func TestToolsInstallCommand(t *testing.T) {
 		t.Skip("下载地址与架构相关")
 	}
 	realm := "curl -fsSL https://github.com/zhboner/realm/releases/latest/download/realm-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /usr/local/bin realm"
-	if got := ToolsInstallCommand("apk", []string{"socat", "realm", "nftables"}); got != "apk add --no-cache socat nftables && "+realm {
+	if got := ToolsInstallCommand("apk", []string{"iptables", "realm", "nftables"}); got != "apk add --no-cache iptables nftables && "+realm {
 		t.Error(got)
 	}
 	// 包管理器未知时仍可给出下载命令
-	if got := ToolsInstallCommand("", []string{"socat", "realm"}); got != realm {
+	if got := ToolsInstallCommand("", []string{"iptables", "realm"}); got != realm {
 		t.Error(got)
 	}
 }

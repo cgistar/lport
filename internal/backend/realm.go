@@ -16,7 +16,7 @@ func RealmArgs(r model.Rule, proto string) []string {
 	host, port, _ := r.TargetHostPort()
 	args := []string{"-l", "0.0.0.0:" + strconv.Itoa(r.ListenPort), "-r", net.JoinHostPort(host, strconv.Itoa(port))}
 	if proto == model.ProtoUDP {
-		// UDP 会话超时与 socat 后端保持一致
+		// UDP 会话超时与内置后端保持一致
 		args = append(args, "-u", "-t", "--udp-timeout", "120")
 	}
 	return args

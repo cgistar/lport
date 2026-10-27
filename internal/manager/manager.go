@@ -234,7 +234,7 @@ func (m *Manager) CheckPort(proto string, port int, excludeID string, checkSyste
 
 // ownPIDsLocked 返回本工具的转发进程 pid，其占用的端口不算系统占用（规则间冲突另行检查）。
 func (m *Manager) ownPIDsLocked() map[int]bool {
-	if s, ok := m.backend.(*backend.Process); ok {
+	if s, ok := m.backend.(interface{ PIDs() map[int]bool }); ok {
 		return s.PIDs()
 	}
 	return nil

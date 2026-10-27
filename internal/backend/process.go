@@ -166,7 +166,7 @@ func (p *proc) stop() {
 	<-p.doneCh
 }
 
-// Process 通过监管用户态转发子进程（socat / realm）实现转发，每条规则每个协议一个进程。
+// Process 通过监管用户态转发子进程（realm）实现转发，每条规则每个协议一个进程。
 type Process struct {
 	name  string // 后端名，同时也是工具名
 	args  func(r model.Rule, proto string) []string

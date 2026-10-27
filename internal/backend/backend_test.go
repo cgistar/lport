@@ -1,13 +1,16 @@
 package backend
 
 import (
+	"errors"
 	"flag"
+	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"lport/internal/model"
 )
@@ -43,17 +46,6 @@ var testRules = []model.Rule{
 	{ID: "c3", Name: "off", Proto: "udp", ListenPort: 9999, Target: "10.0.0.7:99", Enabled: false},
 }
 
-func TestSocatArgs(t *testing.T) {
-	got := strings.Join(SocatArgs(testRules[0], "tcp"), " ")
-	if got != "TCP4-LISTEN:8080,fork,reuseaddr TCP4:10.0.0.5:80" {
-		t.Error(got)
-	}
-	got = strings.Join(SocatArgs(testRules[1], "udp"), " ")
-	if got != "-T 120 UDP4-LISTEN:5353,fork,reuseaddr UDP4:10.0.0.6:53" {
-		t.Error(got)
-	}
-}
-
 func TestRealmArgs(t *testing.T) {
 	got := strings.Join(RealmArgs(testRules[0], "tcp"), " ")
 	if got != "-l 0.0.0.0:8080 -r 10.0.0.5:80" {
@@ -75,8 +67,8 @@ func TestTailBufferLastLine(t *testing.T) {
 		t.Error(got)
 	}
 	var c tailBuffer
-	c.Write([]byte("socat: E bind: Address in use\n"))
-	if got := c.lastLine(); got != "socat: E bind: Address in use" {
+	c.Write([]byte("bind: Address in use\n"))
+	if got := c.lastLine(); got != "bind: Address in use" {
 		t.Error(got)
 	}
 }
@@ -98,33 +90,185 @@ func TestNftMapScript(t *testing.T) {
 	}
 }
 
-// socat 启动即失败（端口被占用）时 Sync 须返回错误且不留下进程，端口释放后可正常启动
-func TestSocatStartupFailure(t *testing.T) {
-	if _, err := exec.LookPath("socat"); err != nil {
-		t.Skip("未安装 socat")
+// 启动即失败（端口被占用）时 Sync 须返回错误且不保留该规则，端口释放后可正常启动
+func TestStartupFailure(t *testing.T) {
+	for _, b := range []Backend{NewBuiltin(), NewRealm()} {
+		t.Run(b.Name(), func(t *testing.T) {
+			if err := b.Available(); err != nil {
+				t.Skip(err)
+			}
+			l, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			port := l.Addr().(*net.TCPAddr).Port
+			rule := model.Rule{ID: "busy", Proto: "both", ListenPort: port, Target: "127.0.0.1:9", Enabled: true}
+			t.Cleanup(func() { _ = b.Cleanup() })
+
+			err = b.Sync([]model.Rule{rule})
+			if err == nil || !strings.Contains(err.Error(), b.Name()+" 启动失败") {
+				t.Fatalf("Sync 应返回启动失败，实际: %v", err)
+			}
+			if st := b.Status(); len(st) != 0 {
+				t.Fatalf("失败的规则不应保留: %+v", st)
+			}
+			// 同一规则的 udp 不能残留监听
+			if u, err := net.ListenPacket("udp4", ":"+strconv.Itoa(port)); err != nil {
+				t.Fatalf("udp 端口未释放: %v", err)
+			} else {
+				u.Close()
+			}
+
+			l.Close()
+			if err := b.Sync([]model.Rule{rule}); err != nil {
+				t.Fatalf("端口释放后 Sync 失败: %v", err)
+			}
+			if st := b.Status()["busy"]; st.State != "running" {
+				t.Fatalf("status=%+v", st)
+			}
+		})
 	}
+}
+
+// echoServer 在 127.0.0.1 同一端口上提供 tcp / udp 回显，回包带协议前缀。
+func echoServer(t *testing.T) int {
+	t.Helper()
 	l, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	port := l.Addr().(*net.TCPAddr).Port
-	rule := model.Rule{ID: "busy", Proto: "tcp", ListenPort: port, Target: "127.0.0.1:9", Enabled: true}
-	s := NewSocat()
-	t.Cleanup(func() { _ = s.Cleanup() })
-
-	err = s.Sync([]model.Rule{rule})
-	if err == nil || !strings.Contains(err.Error(), "socat 启动失败") {
-		t.Fatalf("Sync 应返回启动失败，实际: %v", err)
+	u, err := net.ListenPacket("udp4", "127.0.0.1:"+strconv.Itoa(port))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if st := s.Status(); len(st) != 0 {
-		t.Fatalf("失败的规则不应保留进程: %+v", st)
+	t.Cleanup(func() { l.Close(); u.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				b, _ := io.ReadAll(c) // 读到客户端半关闭为止，验证 FIN 能被转发
+				c.Write(append([]byte("tcp:"), b...))
+			}()
+		}
+	}()
+	go func() {
+		b := make([]byte, 1500)
+		for {
+			n, a, err := u.ReadFrom(b)
+			if err != nil {
+				return
+			}
+			u.WriteTo(append([]byte("udp:"), b[:n]...), a)
+		}
+	}()
+	return port
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp4", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+func tcpEcho(port int, msg string) (string, error) {
+	c, err := net.DialTimeout("tcp4", "127.0.0.1:"+strconv.Itoa(port), time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.Write([]byte(msg)); err != nil {
+		return "", err
+	}
+	_ = c.(*net.TCPConn).CloseWrite()
+	b, err := io.ReadAll(c)
+	return string(b), err
+}
+
+func udpEcho(port int, msg string) (string, error) {
+	c, err := net.Dial("udp4", "127.0.0.1:"+strconv.Itoa(port))
+	if err != nil {
+		return "", err
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.Write([]byte(msg)); err != nil {
+		return "", err
+	}
+	b := make([]byte, 1500)
+	n, err := c.Read(b)
+	return string(b[:n]), err
+}
+
+func TestBuiltinForward(t *testing.T) {
+	echo := echoServer(t)
+	lp, lp2 := freePort(t), freePort(t)
+	b := NewBuiltin()
+	t.Cleanup(func() { _ = b.Cleanup() })
+	rules := []model.Rule{
+		{ID: "ip", Name: "ip", Proto: "both", ListenPort: lp, Target: "127.0.0.1:" + strconv.Itoa(echo), Enabled: true},
+		{ID: "dn", Name: "dn", Proto: "tcp", ListenPort: lp2, Target: "localhost:" + strconv.Itoa(echo), Enabled: true},
+	}
+	if err := b.Sync(rules); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := tcpEcho(lp, "hi"); got != "tcp:hi" {
+		t.Errorf("tcp: %q %v", got, err)
+	}
+	if got, err := udpEcho(lp, "hi"); got != "udp:hi" {
+		t.Errorf("udp: %q %v", got, err)
+	}
+	if got, err := tcpEcho(lp2, "dn"); got != "tcp:dn" {
+		t.Errorf("域名目标: %q %v", got, err)
+	}
+	if st := b.Status()["ip"]; st.State != "running" {
+		t.Errorf("status: %+v", st)
 	}
 
+	// 目标不可达：接受后立即关闭客户端连接
+	rules[1].Target = "127.0.0.1:" + strconv.Itoa(freePort(t))
+	if err := b.Sync(rules); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := tcpEcho(lp2, "x"); got != "" {
+		t.Errorf("目标不可达时应无回包: %q %v", got, err)
+	}
+
+	// 停用规则后端口释放，已建立的连接被关闭
+	c, err := net.Dial("tcp4", "127.0.0.1:"+strconv.Itoa(lp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	time.Sleep(50 * time.Millisecond)
+	rules[0].Enabled = false
+	if err := b.Sync(rules); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil || isTimeout(err) {
+		t.Errorf("停用后连接应被关闭: %v", err)
+	}
+	l, err := net.Listen("tcp4", ":"+strconv.Itoa(lp))
+	if err != nil {
+		t.Fatalf("停用后端口应释放: %v", err)
+	}
 	l.Close()
-	if err := s.Sync([]model.Rule{rule}); err != nil {
-		t.Fatalf("端口释放后 Sync 失败: %v", err)
+	if _, ok := b.Status()["ip"]; ok {
+		t.Error("停用的规则不应有状态")
 	}
-	if st := s.Status()["busy"]; st.State != "running" || len(st.PIDs) != 1 {
-		t.Fatalf("status=%+v", st)
-	}
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }

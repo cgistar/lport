@@ -27,7 +27,7 @@ func TestTCPHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	// 模拟 socat 连不上目标：接受后立即关闭
+	// 模拟用户态代理连不上目标：接受后立即关闭
 	go func() {
 		for {
 			c, err := l.Accept()

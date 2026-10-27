@@ -16,7 +16,7 @@ import (
 
 // Tool 描述一个转发依赖工具。
 type Tool struct {
-	Name      string `json:"name"`    // socat | realm | iptables | nftables
+	Name      string `json:"name"`    // realm | iptables | nftables
 	Binary    string `json:"binary"`  // 可执行文件名
 	Package   string `json:"package"` // 包名；为空表示不走包管理器，从发布页下载
 	Installed bool   `json:"installed"`
@@ -39,7 +39,6 @@ type Info struct {
 }
 
 var toolDefs = []Tool{
-	{Name: "socat", Binary: "socat", Package: "socat"},
 	{Name: "realm", Binary: "realm"},
 	{Name: "iptables", Binary: "iptables", Package: "iptables"},
 	{Name: "nftables", Binary: "nft", Package: "nftables"},
@@ -159,10 +158,7 @@ func InstallCommand(pm string, pkgs []string) string {
 
 func toolVersion(path, name string) string {
 	args := []string{"--version"}
-	switch name {
-	case "socat":
-		args = []string{"-V"}
-	case "realm":
+	if name == "realm" {
 		args = []string{"-v"}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -174,9 +170,6 @@ func toolVersion(path, name string) string {
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
-			continue
-		}
-		if name == "socat" && !strings.Contains(line, "version") {
 			continue
 		}
 		return line

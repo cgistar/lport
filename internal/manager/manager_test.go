@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -46,7 +45,7 @@ func newStore(t *testing.T, cfg string) (*config.Store, string) {
 }
 
 const baseCfg = `listen: 127.0.0.1:18999
-backend: socat
+backend: builtin
 admin: {password: test-password}
 rules:
   - {id: keep, proto: tcp, listen_port: 18501, target: "127.0.0.1:9", enabled: true}
@@ -79,15 +78,12 @@ func TestMutateRollsBackWhenSaveFails(t *testing.T) {
 
 // 旧后端清理失败时不能切换，且须重新应用旧规则
 func TestSetBackendAbortsWhenCleanupFails(t *testing.T) {
-	if _, err := exec.LookPath("socat"); err != nil {
-		t.Skip("未安装 socat")
-	}
-	cfg := strings.NewReplacer("backend: socat", "backend: nftables", "127.0.0.1:9", "10.0.0.5:80").Replace(baseCfg)
+	cfg := strings.NewReplacer("backend: builtin", "backend: nftables", "127.0.0.1:9", "10.0.0.5:80").Replace(baseCfg)
 	store, _ := newStore(t, cfg)
 	fb := &fakeBackend{cleanupErr: errors.New("boom")}
 	m := &Manager{store: store, backend: fb}
 
-	if err := m.SetBackend(model.BackendSocat); err == nil || !strings.Contains(err.Error(), "boom") {
+	if err := m.SetBackend(model.BackendBuiltin); err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("应返回清理错误，实际: %v", err)
 	}
 	if m.backend != fb || store.Get().Backend != model.BackendNftables {
@@ -100,9 +96,6 @@ func TestSetBackendAbortsWhenCleanupFails(t *testing.T) {
 
 // 启动时端口已被其它服务占用的规则暂不应用并显示原因，端口释放后重新启用即可生效
 func TestStartBlocksSystemPortConflicts(t *testing.T) {
-	if _, err := exec.LookPath("socat"); err != nil {
-		t.Skip("未安装 socat")
-	}
 	l, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)

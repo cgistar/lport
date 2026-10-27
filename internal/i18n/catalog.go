@@ -17,15 +17,15 @@ var catalog = map[string]string{
 	"原密码错误":            "Current password is incorrect",
 
 	// model
-	"目标地址格式应为 host:port":                     "Target must be in host:port format",
-	"目标端口无效: %s":                             "Invalid target port: %s",
-	"目标主机不能为空":                               "Target host must not be empty",
-	"协议必须是 tcp / udp / both":                 "Protocol must be tcp / udp / both",
-	"监听端口必须在 1-65535 之间":                     "Listen port must be between 1 and 65535",
-	"目标主机既不是 IP 也不是合法域名: %s":                 "Target host is neither an IP address nor a valid domain name: %s",
-	"目前仅支持 IPv4 目标地址":                        "Only IPv4 targets are supported",
-	"%s 后端不能转发到回环地址 %s，请改用 socat 或 realm 后端": "The %s backend cannot forward to loopback address %s; use the socat or realm backend instead",
-	"目标地址不能是 0.0.0.0":                        "Target address cannot be 0.0.0.0",
+	"目标地址格式应为 host:port":                       "Target must be in host:port format",
+	"目标端口无效: %s":                               "Invalid target port: %s",
+	"目标主机不能为空":                                 "Target host must not be empty",
+	"协议必须是 tcp / udp / both":                   "Protocol must be tcp / udp / both",
+	"监听端口必须在 1-65535 之间":                       "Listen port must be between 1 and 65535",
+	"目标主机既不是 IP 也不是合法域名: %s":                   "Target host is neither an IP address nor a valid domain name: %s",
+	"目前仅支持 IPv4 目标地址":                          "Only IPv4 targets are supported",
+	"%s 后端不能转发到回环地址 %s，请改用 builtin 或 realm 后端": "The %s backend cannot forward to loopback address %s; use the builtin or realm backend instead",
+	"目标地址不能是 0.0.0.0":                          "Target address cannot be 0.0.0.0",
 
 	// manager
 	"与规则「%s」(%s/%d) 冲突":      `Conflicts with rule "%s" (%s/%d)`,
@@ -81,14 +81,14 @@ var catalog = map[string]string{
 	"%s 超过大小上限":                   "%s exceeds the size limit",
 
 	// config
-	"解析配置文件 %s 失败: %w":                                       "Failed to parse config file %s: %w",
-	"配置文件 %s 校验失败: %w":                                       "Invalid config file %s: %w",
-	"listen 格式错误 %q，应为 ip:port":                              "Invalid listen address %q; expected ip:port",
-	"backend 必须是 socat / realm / iptables / nftables，当前为 %q": "backend must be socat / realm / iptables / nftables, got %q",
-	"第 %d 条规则 (%s): %w":                                      "Rule %d (%s): %w",
-	"规则 %s 的监听端口 %d 与管理面板端口冲突":                               "Rule %s: listen port %d conflicts with the admin panel port",
-	"规则 %s 与 %s 的监听端口 %d 冲突":                                 "Rules %s and %s both listen on port %d",
-	"保存配置失败: %w":                                             "Failed to save configuration: %w",
+	"解析配置文件 %s 失败: %w":                                         "Failed to parse config file %s: %w",
+	"配置文件 %s 校验失败: %w":                                         "Invalid config file %s: %w",
+	"listen 格式错误 %q，应为 ip:port":                                "Invalid listen address %q; expected ip:port",
+	"backend 必须是 builtin / realm / iptables / nftables，当前为 %q": "backend must be builtin / realm / iptables / nftables, got %q",
+	"第 %d 条规则 (%s): %w":                                        "Rule %d (%s): %w",
+	"规则 %s 的监听端口 %d 与管理面板端口冲突":                                 "Rule %s: listen port %d conflicts with the admin panel port",
+	"规则 %s 与 %s 的监听端口 %d 冲突":                                   "Rules %s and %s both listen on port %d",
+	"保存配置失败: %w":                                               "Failed to save configuration: %w",
 
 	// service
 	"未检测到 systemd 或 OpenRC，请手动运行: lport serve": "Neither systemd nor OpenRC was detected; run lport serve manually",

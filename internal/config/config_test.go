@@ -40,13 +40,13 @@ func TestAutoBackend(t *testing.T) {
 		cfg   string
 		want  string
 	}{
-		{true, []string{"socat", "iptables", "nftables"}, "", "nftables"},
-		{true, []string{"socat", "iptables"}, "", "iptables"},
-		{true, []string{"socat"}, "", "socat"},
-		{false, []string{"socat", "iptables", "nftables"}, "", "socat"},
+		{true, []string{"iptables", "nftables"}, "", "nftables"},
+		{true, []string{"iptables"}, "", "iptables"},
+		{true, nil, "", "builtin"},
+		{false, []string{"iptables", "nftables"}, "", "builtin"},
 		// 已有回环目标规则，内核后端不适用；域名目标可用于内核后端
 		{true, []string{"nftables"}, "rules:\n  - {proto: tcp, listen_port: 1000, target: example.com:80}\n", "nftables"},
-		{true, []string{"nftables"}, "rules:\n  - {proto: tcp, listen_port: 1000, target: 127.0.0.1:80}\n", "socat"},
+		{true, []string{"nftables"}, "rules:\n  - {proto: tcp, listen_port: 1000, target: 127.0.0.1:80}\n", "builtin"},
 		// 显式指定的后端不被覆盖
 		{true, []string{"nftables"}, "backend: iptables\n", "iptables"},
 	}
@@ -73,7 +73,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatal("expected generated password")
 	}
 	c := s.Get()
-	if c.Listen != "0.0.0.0:8080" || c.Backend != "socat" || c.Admin.Username != "admin" {
+	if c.Listen != "0.0.0.0:8080" || c.Backend != "builtin" || c.Admin.Username != "admin" {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
 	if bcrypt.CompareHashAndPassword([]byte(c.Admin.PasswordHash), []byte(res.GeneratedPassword)) != nil {
@@ -94,7 +94,7 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestPlainPasswordAndIDFill(t *testing.T) {
 	p := writeCfg(t, `
-backend: socat
+backend: builtin
 admin:
   username: root
   password: secret123
@@ -155,7 +155,7 @@ rules:
 // ID 会写入 iptables 规则注释，含引号、换行等字符的 ID 须在加载时重新生成
 func TestInvalidRuleIDRegenerated(t *testing.T) {
 	stubEnv(t, false)
-	p := writeCfg(t, `backend: socat
+	p := writeCfg(t, `backend: builtin
 rules:
   - {id: "x\" -j ACCEPT\n-A", proto: tcp, listen_port: 18080, target: "10.0.0.5:80"}
   - {id: ok_id-1, proto: tcp, listen_port: 18081, target: "10.0.0.5:80"}
@@ -170,5 +170,20 @@ rules:
 	}
 	if rules[1].ID != "ok_id-1" {
 		t.Errorf("合法 ID 不应改变: %q", rules[1].ID)
+	}
+}
+
+// 已移除的 socat 后端在加载时迁移为内置转发并写回配置
+func TestLegacySocatMigrated(t *testing.T) {
+	p := writeCfg(t, "backend: socat\nadmin: {password: secret123}\n")
+	s, res, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Get().Backend != "builtin" || !res.Changed {
+		t.Fatalf("backend=%s changed=%v", s.Get().Backend, res.Changed)
+	}
+	if b, _ := os.ReadFile(p); !strings.Contains(string(b), "backend: builtin") {
+		t.Errorf("迁移结果未写回配置: %s", b)
 	}
 }
