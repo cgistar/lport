@@ -7,7 +7,7 @@ Port forwarding manager for Linux: forward local TCP/UDP ports to any `IP/domain
 ## Features
 
 - Runs on Alpine / Debian / Ubuntu / CentOS / Rocky / Alma / Fedora, amd64 / arm64 / armv7 / armv6 / 386
-- Three forwarding backends: **nftables** (recommended), **iptables**, **socat**; a missing tool can be installed from the UI with one click
+- Four forwarding backends: **nftables** (recommended), **iptables**, **socat**, **realm**; a missing tool can be installed from the UI with one click (realm is downloaded from its GitHub releases into `/usr/local/bin`)
 - Targets can be IPs or domain names; domains are re-resolved every 60 seconds and rules follow IP changes automatically
 - Port conflict checks against other rules, the admin panel, and ports already in use on the system (with the owning process shown)
 - Connectivity probe: check in one click whether the local port and the target are reachable, to pinpoint failures quickly
@@ -28,7 +28,7 @@ cd lport-*-linux-amd64
 The installer asks for:
 
 1. The admin password (press Enter to generate a random one)
-2. The default forwarding backend `nftables / iptables / socat [nftables]`; it can install the tool if it is missing
+2. The default forwarding backend `nftables / iptables / socat / realm [nftables]`; it can install the tool if it is missing
 3. Whether to register a system service that starts on boot
 
 Non-interactive install: `./lport install -y --backend nftables --listen 0.0.0.0:8080`
@@ -67,7 +67,7 @@ Every command accepts `--config` to choose the configuration file (default `/etc
 
 ```yaml
 listen: 0.0.0.0:8080      # admin panel address
-backend: nftables         # nftables | iptables | socat
+backend: nftables         # nftables | iptables | socat | realm
 admin:
   username: admin
   password: ""            # plain text allowed; converted to password_hash on startup
@@ -100,11 +100,11 @@ lport trusts `X-Forwarded-For` (for the login rate limit) and `X-Forwarded-Proto
 
 ### Backend comparison
 
-| | nftables | iptables | socat |
-|---|---|---|---|
-| Performance | Highest (in-kernel, map lookup) | High (in-kernel) | Lower (user space) |
-| Target on local 127.0.0.1 | Not supported | Not supported | Supported |
-| Best for | Modern systems | Older systems (e.g. CentOS 7) | Forwarding to local ports |
+| | nftables | iptables | realm | socat |
+|---|---|---|---|---|
+| Performance | Highest (in-kernel, map lookup) | High (in-kernel) | Medium (user space, async Rust) | Lower (user space, process per connection) |
+| Target on local 127.0.0.1 | Not supported | Not supported | Supported | Supported |
+| Best for | Modern systems | Older systems (e.g. CentOS 7) | Local ports, or when kernel NAT is unavailable | Forwarding to local ports |
 
 ## Building from source
 

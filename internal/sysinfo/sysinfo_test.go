@@ -2,6 +2,7 @@ package sysinfo
 
 import (
 	"errors"
+	"runtime"
 	"testing"
 )
 
@@ -50,6 +51,20 @@ func TestInstallCommand(t *testing.T) {
 		t.Error(got)
 	}
 	if got := InstallCommand("dnf", nil); got != "" {
+		t.Error(got)
+	}
+}
+
+func TestToolsInstallCommand(t *testing.T) {
+	if runtime.GOARCH != "amd64" {
+		t.Skip("下载地址与架构相关")
+	}
+	realm := "curl -fsSL https://github.com/zhboner/realm/releases/latest/download/realm-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /usr/local/bin realm"
+	if got := ToolsInstallCommand("apk", []string{"socat", "realm", "nftables"}); got != "apk add --no-cache socat nftables && "+realm {
+		t.Error(got)
+	}
+	// 包管理器未知时仍可给出下载命令
+	if got := ToolsInstallCommand("", []string{"socat", "realm"}); got != realm {
 		t.Error(got)
 	}
 }

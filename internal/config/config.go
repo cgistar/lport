@@ -118,7 +118,7 @@ func (s *Store) normalize(res *LoadResult) error {
 		res.Changed = true
 	}
 	if !model.ValidBackend(c.Backend) {
-		return fmt.Errorf("backend 必须是 socat / iptables / nftables，当前为 %q", c.Backend)
+		return fmt.Errorf("backend 必须是 socat / realm / iptables / nftables，当前为 %q", c.Backend)
 	}
 	if c.Admin.Username == "" {
 		c.Admin.Username = "admin"

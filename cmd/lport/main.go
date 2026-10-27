@@ -189,7 +189,7 @@ func cmdInstall(args []string) error {
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
 	cfgPath := fs.String("config", config.DefaultPath, "配置文件路径")
 	listen := fs.String("listen", "", "监听地址，如 0.0.0.0:8080")
-	backendFlag := fs.String("backend", "", "转发工具 nftables | iptables | socat（默认交互选择）")
+	backendFlag := fs.String("backend", "", "转发工具 nftables | iptables | socat | realm（默认交互选择）")
 	yes := fs.Bool("y", false, "非交互模式，全部使用默认值")
 	_ = fs.Parse(args)
 	if err := requireRoot(); err != nil {
@@ -226,7 +226,7 @@ func cmdInstall(args []string) error {
 	case *backendFlag != "":
 		backend = *backendFlag
 		if !model.ValidBackend(backend) {
-			return fmt.Errorf("--backend 必须是 nftables / iptables / socat")
+			return fmt.Errorf("--backend 必须是 nftables / iptables / socat / realm")
 		}
 	case res.BackendAuto && p.interactive:
 		backend = p.chooseBackend(store.Get().Rules)
@@ -286,7 +286,7 @@ func ensureTool(p *prompter, backend string) {
 		return
 	}
 	info := sysinfo.Detect()
-	cmdline := sysinfo.InstallCommand(info.PackageManager, []string{backend})
+	cmdline := sysinfo.ToolsInstallCommand(info.PackageManager, []string{backend})
 	if cmdline == "" {
 		fmt.Printf("警告: %s 未安装且无法识别包管理器，请手动安装后执行 systemctl restart lport\n", backend)
 		return

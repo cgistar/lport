@@ -32,6 +32,7 @@ const zh = {
   'api.failed': '请求失败 ({status})',
 
   'backend.socat': 'socat（用户态进程）',
+  'backend.realm': 'realm（用户态进程）',
   'backend.iptables': 'iptables（内核 NAT）',
   'backend.nftables': 'nftables（内核 NAT）',
 
@@ -131,6 +132,8 @@ const zh = {
   'settings.switchContent': '将先清除当前后端的所有转发，再用新后端重新应用全部规则；失败时自动回滚。',
   'settings.switched': '已切换到 {backend}',
   'settings.desc.socat': '每条规则一个 socat 进程，支持转发到域名和本机回环地址，配置简单；性能低于内核转发。',
+  'settings.desc.realm':
+    '每条规则一个 realm 进程（Rust 编写的高性能中转），支持转发到域名和本机回环地址；性能明显优于 socat。不在系统软件源中，安装时从 GitHub 下载。',
   'settings.desc.iptables': '内核 DNAT，性能高；目标可为 IP 或域名（每 60 秒重新解析）。仅操作 LPORT_* 自有链。',
   'settings.desc.nftables':
     '内核 DNAT，性能最好；使用 map 哈希查找，规则数量多时匹配开销不变（老版本自动降级为逐条匹配）。目标可为 IP 或域名（每 60 秒重新解析），仅操作独立的 ip lport 表。',
@@ -181,6 +184,7 @@ const en: Record<MessageKey, string> = {
   'api.failed': 'Request failed ({status})',
 
   'backend.socat': 'socat (user-space process)',
+  'backend.realm': 'realm (user-space process)',
   'backend.iptables': 'iptables (kernel NAT)',
   'backend.nftables': 'nftables (kernel NAT)',
 
@@ -287,6 +291,8 @@ const en: Record<MessageKey, string> = {
   'settings.switched': 'Switched to {backend}',
   'settings.desc.socat':
     'One socat process per rule. Can forward to domain names and local loopback addresses and is simple to set up, but slower than in-kernel forwarding.',
+  'settings.desc.realm':
+    'One realm process per rule (a high-performance relay written in Rust). Can forward to domain names and local loopback addresses and is much faster than socat. Not in system package repositories; installing downloads it from GitHub.',
   'settings.desc.iptables':
     'In-kernel DNAT with high performance. Targets can be IPs or domain names (re-resolved every 60 seconds). Only touches its own LPORT_* chains.',
   'settings.desc.nftables':

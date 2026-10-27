@@ -54,6 +54,33 @@ func TestSocatArgs(t *testing.T) {
 	}
 }
 
+func TestRealmArgs(t *testing.T) {
+	got := strings.Join(RealmArgs(testRules[0], "tcp"), " ")
+	if got != "-l 0.0.0.0:8080 -r 10.0.0.5:80" {
+		t.Error(got)
+	}
+	got = strings.Join(RealmArgs(testRules[1], "udp"), " ")
+	if got != "-l 0.0.0.0:5353 -r 10.0.0.6:53 -u -t --udp-timeout 120" {
+		t.Error(got)
+	}
+}
+
+// realm 绑定失败时以 Rust panic 退出，需取 panic 消息而不是末尾的 RUST_BACKTRACE 提示
+func TestTailBufferLastLine(t *testing.T) {
+	var b tailBuffer
+	b.Write([]byte("thread 'tokio-runtime-worker' panicked at realm_core/src/tcp/mod.rs:37:58:\n" +
+		"[tcp]failed to bind 0.0.0.0:80: Address already in use (os error 98)\n" +
+		"note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"))
+	if got := b.lastLine(); got != "[tcp]failed to bind 0.0.0.0:80: Address already in use (os error 98)" {
+		t.Error(got)
+	}
+	var c tailBuffer
+	c.Write([]byte("socat: E bind: Address in use\n"))
+	if got := c.lastLine(); got != "socat: E bind: Address in use" {
+		t.Error(got)
+	}
+}
+
 func TestIptablesScript(t *testing.T) {
 	assertGolden(t, "iptables.golden", IptablesRestoreScript(testRules))
 }

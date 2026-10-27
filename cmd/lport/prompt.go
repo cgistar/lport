@@ -92,7 +92,7 @@ func (p *prompter) password() (string, error) {
 // chooseBackend 让用户选择转发工具，默认 nftables；会拒绝与已有规则不兼容的后端。
 func (p *prompter) chooseBackend(rules []model.Rule) string {
 	const def = model.BackendNftables
-	order := []string{model.BackendNftables, model.BackendIptables, model.BackendSocat}
+	order := []string{model.BackendNftables, model.BackendIptables, model.BackendSocat, model.BackendRealm}
 	fmt.Println("选择默认转发工具:")
 	for i, b := range order {
 		state := "未安装，选择后可自动安装"
@@ -102,7 +102,7 @@ func (p *prompter) chooseBackend(rules []model.Rule) string {
 		fmt.Printf("  %d) %-9s %s\n", i+1, b, state)
 	}
 	for {
-		ans := strings.ToLower(p.line(fmt.Sprintf("请选择 nftables / iptables / socat [%s]: ", def)))
+		ans := strings.ToLower(p.line(fmt.Sprintf("请选择 nftables / iptables / socat / realm [%s]: ", def)))
 		b := ans
 		if ans == "" {
 			b = def

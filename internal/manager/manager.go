@@ -232,9 +232,9 @@ func (m *Manager) CheckPort(proto string, port int, excludeID string, checkSyste
 	return checkPort(m.store.Get(), proto, port, excludeID, checkSystem, own)
 }
 
-// ownPIDsLocked 返回本工具 socat 进程 pid，其占用的端口不算系统占用（规则间冲突另行检查）。
+// ownPIDsLocked 返回本工具的转发进程 pid，其占用的端口不算系统占用（规则间冲突另行检查）。
 func (m *Manager) ownPIDsLocked() map[int]bool {
-	if s, ok := m.backend.(*backend.Socat); ok {
+	if s, ok := m.backend.(*backend.Process); ok {
 		return s.PIDs()
 	}
 	return nil
@@ -329,7 +329,7 @@ func (m *Manager) validateRule(c *config.Config, r *model.Rule) error {
 	if err := r.Validate(c.Backend); err != nil {
 		return err
 	}
-	if c.Backend != model.BackendSocat && r.Enabled {
+	if !model.UserSpace(c.Backend) && r.Enabled {
 		host, _, _ := r.TargetHostPort()
 		if _, err := backend.ResolveHost(host, ""); err != nil {
 			return err
@@ -464,7 +464,7 @@ type ProbeResult struct {
 const probeTimeout = 3 * time.Second
 
 // Probe 检测规则的本机监听端口与目标端口。本机检测连接本机出口 IP 而非 127.0.0.1，
-// 使流量经过与外部客户端相同的 socat / DNAT 规则（DNAT 后源地址为回环会被内核丢弃）。
+// 使流量经过与外部客户端相同的用户态进程 / DNAT 规则（DNAT 后源地址为回环会被内核丢弃）。
 func (m *Manager) Probe(id string) (*ProbeResult, error) {
 	cfg := m.store.Get()
 	i, err := findRule(&cfg, id)
@@ -474,8 +474,8 @@ func (m *Manager) Probe(id string) (*ProbeResult, error) {
 	r := cfg.Rules[i]
 	host, port, _ := r.TargetHostPort()
 	targetIP, resolveErr := backend.ResolveHost(host, "")
-	if resolveErr != nil && cfg.Backend == model.BackendSocat {
-		// socat 可转发到回环地址/域名，回环地址解析结果被 ResolveHost 排除，这里直接使用原始主机名
+	if resolveErr != nil && model.UserSpace(cfg.Backend) {
+		// 用户态后端可转发到回环地址/域名，回环地址解析结果被 ResolveHost 排除，这里直接使用原始主机名
 		targetIP, resolveErr = host, nil
 	}
 	localIP := probe.LocalIP(targetIP)
@@ -491,7 +491,7 @@ func (m *Manager) Probe(id string) (*ProbeResult, error) {
 		return probe.TCP(addr, probeTimeout)
 	}
 	runLocal := run
-	if cfg.Backend == model.BackendSocat {
+	if model.UserSpace(cfg.Backend) {
 		runLocal = func(proto, addr string) probe.Result {
 			if proto == model.ProtoUDP {
 				return probe.UDP(addr, probeTimeout)

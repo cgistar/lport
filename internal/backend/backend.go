@@ -39,6 +39,8 @@ func New(name string) (Backend, error) {
 	switch name {
 	case model.BackendSocat:
 		return NewSocat(), nil
+	case model.BackendRealm:
+		return NewRealm(), nil
 	case model.BackendIptables:
 		return &Iptables{}, nil
 	case model.BackendNftables:

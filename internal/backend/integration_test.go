@@ -62,6 +62,7 @@ func TestIntegrationBackends(t *testing.T) {
 		{"nftables-linear", "nft", func() Backend { return &Nftables{mode: nftModeLinear} }, true},
 		{"iptables", "iptables", func() Backend { return &Iptables{} }, true},
 		{"socat", "socat", func() Backend { return NewSocat() }, false},
+		{"realm", "realm", func() Backend { return NewRealm() }, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -70,7 +71,7 @@ func TestIntegrationBackends(t *testing.T) {
 			b := c.new()
 			rules := itRules()
 			if !c.kernel {
-				rules = rules[:2] // socat 自行解析域名，不受 stubDNS 影响；其余场景已由内核后端覆盖
+				rules = rules[:2] // 用户态后端自行解析域名，不受 stubDNS 影响；其余场景已由内核后端覆盖
 			}
 			if err := b.Sync(rules); err != nil {
 				t.Fatalf("Sync: %v", err)
@@ -159,10 +160,10 @@ func TestIntegrationBackends(t *testing.T) {
 	}
 }
 
-// waitSocat 等待 socat 进程开始监听测试端口。
+// waitSocat 等待用户态转发进程开始监听测试端口。
 func waitSocat(t *testing.T, b Backend) {
 	t.Helper()
-	if _, ok := b.(*Socat); !ok {
+	if _, ok := b.(*Process); !ok {
 		return
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -172,5 +173,5 @@ func waitSocat(t *testing.T, b Backend) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatal("socat 未能启动监听")
+	t.Fatal(b.Name() + " 未能启动监听")
 }

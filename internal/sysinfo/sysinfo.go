@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +16,9 @@ import (
 
 // Tool 描述一个转发依赖工具。
 type Tool struct {
-	Name      string `json:"name"`    // socat | iptables | nftables
+	Name      string `json:"name"`    // socat | realm | iptables | nftables
 	Binary    string `json:"binary"`  // 可执行文件名
-	Package   string `json:"package"` // 包名
+	Package   string `json:"package"` // 包名；为空表示不走包管理器，从发布页下载
 	Installed bool   `json:"installed"`
 	Path      string `json:"path"`
 	Version   string `json:"version"`
@@ -39,18 +40,45 @@ type Info struct {
 
 var toolDefs = []Tool{
 	{Name: "socat", Binary: "socat", Package: "socat"},
+	{Name: "realm", Binary: "realm"},
 	{Name: "iptables", Binary: "iptables", Package: "iptables"},
 	{Name: "nftables", Binary: "nft", Package: "nftables"},
 }
 
 // ToolBinary 返回工具对应的可执行文件名。
 func ToolBinary(name string) string {
-	for _, t := range toolDefs {
-		if t.Name == name {
-			return t.Binary
-		}
+	if t, ok := toolDef(name); ok {
+		return t.Binary
 	}
 	return name
+}
+
+func toolDef(name string) (Tool, bool) {
+	for _, t := range toolDefs {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return Tool{}, false
+}
+
+// ToolPath 查找工具的可执行文件。除 PATH 外还查找下载安装目录，
+// 服务管理器提供的 PATH 可能不含 /usr/local/bin。
+func ToolPath(name string) (string, error) {
+	bin := ToolBinary(name)
+	p, err := exec.LookPath(bin)
+	if err == nil {
+		return p, nil
+	}
+	if p := filepath.Join(downloadDir, bin); isExecutable(p) {
+		return p, nil
+	}
+	return "", err
+}
+
+func isExecutable(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0
 }
 
 // ParseOSRelease 解析 /etc/os-release 内容。
@@ -131,8 +159,11 @@ func InstallCommand(pm string, pkgs []string) string {
 
 func toolVersion(path, name string) string {
 	args := []string{"--version"}
-	if name == "socat" {
+	switch name {
+	case "socat":
 		args = []string{"-V"}
+	case "realm":
+		args = []string{"-v"}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -209,20 +240,42 @@ func Detect() Info {
 	info.PackageManager = PackageManager(info.Family, exec.LookPath)
 	var missing []string
 	for _, t := range toolDefs {
-		if p, err := exec.LookPath(t.Binary); err == nil {
+		if p, err := ToolPath(t.Name); err == nil {
 			t.Installed, t.Path, t.Version = true, p, toolVersion(p, t.Name)
 		} else {
-			missing = append(missing, t.Package)
+			missing = append(missing, t.Name)
 		}
 		info.Tools = append(info.Tools, t)
 	}
-	info.InstallCommand = InstallCommand(info.PackageManager, missing)
+	info.InstallCommand = ToolsInstallCommand(info.PackageManager, missing)
 	return info
+}
+
+// ToolsInstallCommand 生成安装若干工具的完整命令：包管理器安装的合并为一条，需下载的各自追加。
+// 包管理器未知时只返回下载部分。
+func ToolsInstallCommand(pm string, tools []string) string {
+	var pkgs, parts []string
+	for _, name := range tools {
+		if t, ok := toolDef(name); ok && t.Package != "" {
+			pkgs = append(pkgs, t.Package)
+		}
+	}
+	if c := InstallCommand(pm, pkgs); c != "" {
+		parts = append(parts, c)
+	}
+	for _, name := range tools {
+		if t, ok := toolDef(name); ok && t.Package == "" {
+			if c := downloadCommand(t); c != "" {
+				parts = append(parts, c)
+			}
+		}
+	}
+	return strings.Join(parts, " && ")
 }
 
 // ToolInstalled 判断某个工具是否可用。
 func ToolInstalled(name string) bool {
-	_, err := exec.LookPath(ToolBinary(name))
+	_, err := ToolPath(name)
 	return err == nil
 }
 
@@ -238,29 +291,48 @@ func Install(tools []string) (string, string, error) {
 		return "", "", errors.New("需要 root 权限才能安装软件包")
 	}
 	var pkgs []string
+	var downloads []Tool
 	for _, name := range tools {
-		found := false
-		for _, t := range toolDefs {
-			if t.Name == name {
-				pkgs, found = append(pkgs, t.Package), true
-			}
-		}
-		if !found {
+		t, ok := toolDef(name)
+		switch {
+		case !ok:
 			return "", "", fmt.Errorf("未知工具: %s", name)
+		case t.Package == "":
+			downloads = append(downloads, t)
+		default:
+			pkgs = append(pkgs, t.Package)
 		}
 	}
-	info := Detect()
-	cmdline := InstallCommand(info.PackageManager, pkgs)
-	if cmdline == "" {
-		return "", "", errors.New("无法识别当前系统的包管理器，请手动安装")
+	var cmds []string
+	var out strings.Builder
+	if len(pkgs) > 0 {
+		cmdline := InstallCommand(Detect().PackageManager, pkgs)
+		if cmdline == "" {
+			return "", "", errors.New("无法识别当前系统的包管理器，请手动安装")
+		}
+		cmds = append(cmds, cmdline)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", cmdline)
+		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+		b, err := cmd.CombinedOutput()
+		out.Write(b)
+		if err != nil {
+			return cmdline, out.String(), fmt.Errorf("安装失败: %w", err)
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", cmdline)
-	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return cmdline, string(out), fmt.Errorf("安装失败: %w", err)
+	for _, t := range downloads {
+		url, err := downloadURL(t)
+		if err != nil {
+			return strings.Join(cmds, " && "), out.String(), err
+		}
+		cmds = append(cmds, "download "+url)
+		fmt.Fprintf(&out, "downloading %s\n", url)
+		dst, err := download(url, t.Binary)
+		if err != nil {
+			return strings.Join(cmds, " && "), out.String(), fmt.Errorf("安装失败: %w", err)
+		}
+		fmt.Fprintf(&out, "installed to %s\n", dst)
 	}
-	return cmdline, string(out), nil
+	return strings.Join(cmds, " && "), out.String(), nil
 }

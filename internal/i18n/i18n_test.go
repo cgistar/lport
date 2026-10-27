@@ -30,8 +30,8 @@ func TestTranslate(t *testing.T) {
 			"Failed to apply rules: nftables is not installed; install it from the Overview page first",
 		},
 		{
-			"规则「x」不适用于 nftables 后端: nftables 后端不能转发到回环地址 127.0.0.1，请改用 socat 后端",
-			`Rule "x" is not compatible with the nftables backend: The nftables backend cannot forward to loopback address 127.0.0.1; use the socat backend instead`,
+			"规则「x」不适用于 nftables 后端: nftables 后端不能转发到回环地址 127.0.0.1，请改用 socat 或 realm 后端",
+			`Rule "x" is not compatible with the nftables backend: The nftables backend cannot forward to loopback address 127.0.0.1; use the socat or realm backend instead`,
 		},
 		{"解析 foo.example 失败: lookup foo.example: no such host", "Failed to resolve foo.example: lookup foo.example: no such host"},
 		{`listen 格式错误 "abc"，应为 ip:port`, `Invalid listen address "abc"; expected ip:port`},

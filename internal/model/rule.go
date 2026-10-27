@@ -19,9 +19,15 @@ const (
 	BackendSocat    = "socat"
 	BackendIptables = "iptables"
 	BackendNftables = "nftables"
+	BackendRealm    = "realm"
 )
 
-var Backends = []string{BackendSocat, BackendIptables, BackendNftables}
+var Backends = []string{BackendSocat, BackendRealm, BackendIptables, BackendNftables}
+
+// UserSpace 判断是否为用户态进程后端：自行解析域名，可转发到回环地址。
+func UserSpace(backend string) bool {
+	return backend == BackendSocat || backend == BackendRealm
+}
 
 func ValidBackend(b string) bool {
 	for _, x := range Backends {
@@ -94,12 +100,12 @@ func (r *Rule) Validate(backend string) error {
 	}
 	ip := net.ParseIP(host)
 	if ip != nil && ip.To4() != nil {
-		// 统一为点分十进制，避免 ::ffff:1.2.3.4 这类 IPv4 映射地址原样进入 iptables / nft / socat 参数
+		// 统一为点分十进制，避免 ::ffff:1.2.3.4 这类 IPv4 映射地址原样进入 iptables / nft / socat / realm 参数
 		host = ip.To4().String()
 		r.Target = net.JoinHostPort(host, strconv.Itoa(port))
 	}
 	if ip == nil {
-		// 域名：socat 直接使用；内核后端解析为 IPv4 后应用，并定期重新解析
+		// 域名：用户态后端直接使用；内核后端解析为 IPv4 后应用，并定期重新解析
 		if !hostnameRe.MatchString(host) {
 			return fmt.Errorf("目标主机既不是 IP 也不是合法域名: %s", host)
 		}
@@ -108,11 +114,11 @@ func (r *Rule) Validate(backend string) error {
 	if ip.To4() == nil {
 		return fmt.Errorf("目前仅支持 IPv4 目标地址")
 	}
-	if backend == BackendSocat {
+	if UserSpace(backend) {
 		return nil
 	}
 	if ip.IsLoopback() {
-		return fmt.Errorf("%s 后端不能转发到回环地址 %s，请改用 socat 后端", backend, host)
+		return fmt.Errorf("%s 后端不能转发到回环地址 %s，请改用 socat 或 realm 后端", backend, host)
 	}
 	if ip.IsUnspecified() {
 		return fmt.Errorf("目标地址不能是 0.0.0.0")
@@ -120,7 +126,7 @@ func (r *Rule) Validate(backend string) error {
 	return nil
 }
 
-// SameForward 判断两条规则的实际转发配置是否一致（用于 socat diff）。
+// SameForward 判断两条规则的实际转发配置是否一致（用于用户态后端 diff）。
 func (r Rule) SameForward(o Rule) bool {
 	return r.Proto == o.Proto && r.ListenPort == o.ListenPort && r.Target == o.Target
 }

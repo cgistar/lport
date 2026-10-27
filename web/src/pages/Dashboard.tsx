@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import CopyButton from '@/components/copy-button'
 import Notice from '@/components/notice'
-import { api, type InstallResult, type SystemInfo } from '../api'
+import { api, type InstallResult, type SystemInfo, type Tool } from '../api'
 import { useI18n } from '../i18n'
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -70,7 +70,8 @@ export default function Dashboard() {
   const { info } = data
   const missing = info.tools.filter((tool) => !tool.installed)
   const backendTool = info.tools.find((tool) => tool.name === data.backend)
-  const canInstall = info.is_root && !!info.package_manager && installing === null
+  // 没有 package 的工具（realm）从发布页下载，不依赖包管理器
+  const canInstall = (tool: Tool) => info.is_root && installing === null && (!!info.package_manager || !tool.package)
 
   return (
     <div className="flex flex-col gap-4">
@@ -134,7 +135,7 @@ export default function Dashboard() {
             <CardTitle>{t('dash.tools')}</CardTitle>
             {missing.length > 1 && (
               <CardAction>
-                <Button disabled={!canInstall} onClick={() => install(missing.map((tool) => tool.name), 'all')}>
+                <Button disabled={!missing.every(canInstall)} onClick={() => install(missing.map((tool) => tool.name), 'all')}>
                   {installing === 'all' ? <Spinner /> : <Download />}
                   {t('dash.installAll')}
                 </Button>
@@ -168,7 +169,7 @@ export default function Dashboard() {
                     </TableCell>
                     <TableCell className="text-right">
                       {!tool.installed && (
-                        <Button size="sm" variant="outline" disabled={!canInstall} onClick={() => install([tool.name], tool.name)}>
+                        <Button size="sm" variant="outline" disabled={!canInstall(tool)} onClick={() => install([tool.name], tool.name)}>
                           {installing === tool.name ? <Spinner /> : <Download />}
                           {t('dash.install')}
                         </Button>
@@ -180,14 +181,14 @@ export default function Dashboard() {
             </Table>
             {info.install_command && (
               <div className="flex flex-col gap-2">
-                <span className="text-sm text-muted-foreground">{t('dash.manualCommand', { pm: info.package_manager })}</span>
+                <span className="text-sm text-muted-foreground">{t('dash.manualCommand', { pm: info.package_manager || 'shell' })}</span>
                 <div className="flex items-start gap-2 rounded-lg bg-neutral-900 p-3 font-mono text-xs break-all text-neutral-100">
                   <span className="flex-1">{info.install_command}</span>
                   <CopyButton text={info.install_command} className="text-neutral-300 hover:bg-neutral-800 hover:text-white" />
                 </div>
               </div>
             )}
-            {!info.package_manager && missing.length > 0 && <Notice type="warning" title={t('dash.noPackageManager')} />}
+            {!info.package_manager && missing.some((tool) => tool.package) && <Notice type="warning" title={t('dash.noPackageManager')} />}
           </CardContent>
         </Card>
       </div>
