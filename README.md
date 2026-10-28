@@ -71,6 +71,7 @@ When it finishes, open `http://<server-ip>:8080` and log in.
 |---|---|
 | `lport install` | Install or upgrade (an existing install is upgraded and its service restarted) |
 | `lport uninstall [--purge]` | Remove the service; `--purge` also deletes the configuration |
+| `lport upgrade [--version vX.Y.Z] [--force] [-y]` | Download the latest (or the given) release from GitHub, verify its sha256, replace the binary and restart the service; the configuration is kept |
 | `lport start` / `stop` / `restart` | Start, stop or restart the installed service |
 | `lport passwd [new-password]` | Reset the admin password (random if omitted) |
 | `lport list` | List rules and their status |

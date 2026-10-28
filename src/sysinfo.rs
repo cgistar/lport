@@ -426,51 +426,79 @@ pub fn download_url(name: &str, arch: &str) -> Result<String, String> {
 /// 解压出的可执行文件大小上限。
 const MAX_BINARY_SIZE: u64 = 64 << 20;
 
-/// 用系统的 curl 或 wget 下载 tar.gz 发布包，把其中名为 binary 的文件安装到 dir。
-/// 不内置 HTTPS 客户端以保持二进制精简；解压与校验在进程内完成。
-fn download(url: &str, binary: &str, dir: &Path) -> Result<PathBuf, String> {
-    let mut cmd = if look_path("curl").is_some() {
-        let mut c = Command::new("curl");
-        c.args([
-            "-fsSL",
-            "--retry",
-            "3",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            "300",
-            url,
-        ]);
-        c
-    } else if look_path("wget").is_some() {
-        let mut c = Command::new("wget");
-        c.args(["-qO-", "-T", "60", url]);
-        c
-    } else {
-        return Err("下载 realm 需要 curl 或 wget".into());
-    };
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("下载失败: {e}"))?;
-    let stdout = child.stdout.take().unwrap();
-    // 先解压到临时文件；下载命令成功退出后才改名替换，被中断或报错的下载不会覆盖已有版本
-    let staged = extract_staged(stdout, binary, dir);
-    let mut err = String::new();
-    if let Some(mut e) = child.stderr.take() {
-        let _ = e.read_to_string(&mut err);
+/// 用系统的 curl 或 wget 下载，输出经管道读取。不内置 HTTPS 客户端以保持二进制精简。
+pub struct Fetch {
+    child: std::process::Child,
+}
+
+impl Fetch {
+    /// 开始下载；系统中没有 curl 或 wget 时返回 None。
+    pub fn start(url: &str) -> Option<Result<Fetch, String>> {
+        let mut cmd = if look_path("curl").is_some() {
+            let mut c = Command::new("curl");
+            c.args([
+                "-fsSL",
+                "--retry",
+                "3",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                "300",
+                url,
+            ]);
+            c
+        } else if look_path("wget").is_some() {
+            let mut c = Command::new("wget");
+            c.args(["-qO-", "-T", "60", url]);
+            c
+        } else {
+            return None;
+        };
+        Some(
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map(|child| Fetch { child })
+                .map_err(|e| format!("下载失败: {e}")),
+        )
     }
-    let status = child.wait().map_err(|e| format!("下载失败: {e}"))?;
+
+    /// 下载内容。只能取一次。
+    pub fn stdout(&mut self) -> std::process::ChildStdout {
+        self.child.stdout.take().expect("stdout 只能取一次")
+    }
+
+    /// 等待下载命令退出；读取方应先读完（或丢弃）stdout，否则下载命令可能阻塞在写管道上。
+    pub fn finish(mut self) -> Result<(), String> {
+        drop(self.child.stdout.take());
+        let mut err = String::new();
+        if let Some(mut e) = self.child.stderr.take() {
+            let _ = e.read_to_string(&mut err);
+        }
+        let status = self.child.wait().map_err(|e| format!("下载失败: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "下载失败: {} {}",
+                crate::backend::exit_text(status),
+                err.trim()
+            ))
+        }
+    }
+}
+
+/// 下载 tar.gz 发布包，把其中名为 binary 的文件安装到 dir。
+fn download(url: &str, binary: &str, dir: &Path) -> Result<PathBuf, String> {
+    let mut f = Fetch::start(url).ok_or("下载 realm 需要 curl 或 wget")??;
+    // 先解压到临时文件；下载命令成功退出后才改名替换，被中断或报错的下载不会覆盖已有版本
+    let staged = extract_staged(f.stdout(), binary, dir);
+    let done = f.finish();
     let tmp = staged?;
-    if !status.success() {
+    if let Err(e) = done {
         let _ = fs::remove_file(&tmp);
-        return Err(format!(
-            "下载失败: {} {}",
-            crate::backend::exit_text(status),
-            err.trim()
-        ));
+        return Err(e);
     }
     let dst = dir.join(binary);
     fs::rename(&tmp, &dst).map_err(|e| {
@@ -491,7 +519,7 @@ fn extract(r: impl Read, binary: &str, dir: &Path) -> Result<PathBuf, String> {
 }
 
 /// extract 的前半部分：校验通过后返回 dir 中的临时文件路径，由调用方改名。
-fn extract_staged(r: impl Read, binary: &str, dir: &Path) -> Result<PathBuf, String> {
+pub fn extract_staged(r: impl Read, binary: &str, dir: &Path) -> Result<PathBuf, String> {
     let mut gz = flate2::read::GzDecoder::new(r);
     let found = {
         let mut ar = tar::Archive::new(&mut gz);

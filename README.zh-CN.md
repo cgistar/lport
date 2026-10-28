@@ -71,6 +71,7 @@ cd lport-*-linux-amd64
 |---|---|
 | `lport install` | 安装或升级（已安装时直接升级并重启服务） |
 | `lport uninstall [--purge]` | 卸载服务，`--purge` 同时删除配置 |
+| `lport upgrade [--version vX.Y.Z] [--force] [-y]` | 从 GitHub 下载最新版（或指定版本），校验 sha256 后替换程序并重启服务，配置不变 |
 | `lport start` / `stop` / `restart` | 启动 / 停止 / 重启已安装的系统服务 |
 | `lport passwd [新密码]` | 重置管理员密码（不填则随机生成） |
 | `lport list` | 列出转发规则及运行状态 |

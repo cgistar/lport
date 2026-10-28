@@ -7,7 +7,7 @@ use crate::config::{self, Store};
 use crate::model::{self, Rule};
 use crate::{portcheck, service, sysinfo};
 
-fn require_root() -> Result<(), String> {
+pub(crate) fn require_root() -> Result<(), String> {
     if sysinfo::is_root() {
         Ok(())
     } else {
@@ -20,13 +20,13 @@ fn isatty(fd: i32) -> bool {
     unsafe { libc::isatty(fd) == 1 }
 }
 
-/// 安装时的交互问答；非交互模式下所有问题直接取默认值。
-struct Prompter {
+/// 安装、升级时的交互问答；非交互模式下所有问题直接取默认值。
+pub(crate) struct Prompter {
     interactive: bool,
 }
 
 impl Prompter {
-    fn new(allow: bool) -> Self {
+    pub(crate) fn new(allow: bool) -> Self {
         Prompter {
             interactive: allow && isatty(0),
         }
@@ -38,14 +38,14 @@ impl Prompter {
         let _ = io::stdout().flush();
         let mut s = String::new();
         if io::stdin().lock().read_line(&mut s).unwrap_or(0) == 0 && s.trim().is_empty() {
-            println!("\n输入已结束，安装已取消");
+            println!("\n输入已结束，已取消");
             std::process::exit(1);
         }
         s.trim().to_string()
     }
 
     /// 询问是否，def 为直接回车时的默认值。
-    fn confirm(&self, question: &str, def: bool) -> bool {
+    pub(crate) fn confirm(&self, question: &str, def: bool) -> bool {
         if !self.interactive {
             return def;
         }

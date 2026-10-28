@@ -19,6 +19,7 @@ mod realm;
 mod service;
 mod splice;
 mod sysinfo;
+mod upgrade;
 
 use std::sync::Arc;
 
@@ -44,6 +45,7 @@ const USAGE: &str = "lport - 端口转发管理工具 Rust 版 ({version})
   lport install   [--config PATH] [--listen ADDR] [--backend NAME] [-y]
                                                     安装程序与系统服务（交互式；-y 或无终端时使用默认值）
   lport uninstall [--config PATH] [--purge]         卸载系统服务，--purge 同时删除配置
+  lport upgrade   [--version vX.Y.Z] [--force] [-y] 从 GitHub 下载最新版（或指定版本）升级并重启服务
   lport start | stop | restart                      启动 / 停止 / 重启系统服务
   lport passwd    [--config PATH] [新密码]          重置管理员密码（不填则随机生成）
   lport list      [--config PATH]                   列出转发规则
@@ -82,6 +84,7 @@ async fn main() {
         "remove" | "rm" => cli::cmd_remove(rest).await,
         "install" => install::cmd_install(rest),
         "uninstall" => install::cmd_uninstall(rest),
+        "upgrade" => upgrade::cmd_upgrade(rest),
         "start" | "stop" | "restart" => install::cmd_service(cmd),
         "probe" => cli::cmd_probe(rest).await,
         "detect" => {
