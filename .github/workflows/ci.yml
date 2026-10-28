@@ -98,12 +98,15 @@ jobs:
           go test -c -tags integration -o "$RUNNER_TEMP/backend.test" ./internal/backend
           go test -c -tags integration -o "$RUNNER_TEMP/manager.test" ./internal/manager
 
+      # 显式指定 shell: bash 才会启用 pipefail，否则 tee 会吞掉测试失败的退出码
       - name: 后端集成测试
         working-directory: internal/backend
+        shell: bash
         run: sudo "$RUNNER_TEMP/backend.test" -test.run Integration -test.v -test.count=1 | tee "$RUNNER_TEMP/backend.out"
 
       - name: 连通性检测集成测试
         working-directory: internal/manager
+        shell: bash
         run: sudo "$RUNNER_TEMP/manager.test" -test.run Integration -test.v -test.count=1 | tee "$RUNNER_TEMP/manager.out"
 
       # 跳过不等于通过：任何集成测试被跳过（如缺少工具、非 root）都视为失败；结果汇总为注解，便于在运行页面查看
