@@ -40,6 +40,9 @@ target() {
 }
 for a in "${ARCHES[@]}"; do target "$a" >/dev/null; done
 
+# Web 面板的前端文件在编译时嵌入二进制，发布包必须包含真实前端
+[[ -f web/dist/index.html ]] || die "web/dist 不存在，请先构建前端（cd web && npm ci && npm run build，或运行 scripts/build.sh）"
+
 if [[ "$(uname -s)" == Linux ]]; then
   log "运行测试"
   (cd rust && cargo test --quiet >/dev/null)

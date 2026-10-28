@@ -148,14 +148,15 @@ Pushing a `v*` tag (e.g. `git tag v1.0.0 && git push origin v1.0.0`) makes GitHu
 
 `rust/` contains a Rust rewrite that lives alongside the Go version. Config files, the CLI and the systemd / OpenRC service files are fully compatible, so either binary can replace the other in place, and `lport list/add/edit/remove` from either version can drive a running service of the other.
 
-- Supported: all four backends (nftables / iptables / realm / builtin), re-resolving domains every 60 seconds, repairing rules removed by someone else, cleaning up leftover rules on startup, and every CLI command including `install` / `uninstall` / `start` / `stop` / `restart` / `probe` / `detect`
-- Not yet ported: the web panel. Use the Go version if you need it
+- Same features as the Go version: the web panel (same frontend, Chinese and English), all four backends, re-resolving domains every 60 seconds, repairing rules removed by someone else, cleaning up leftover rules on startup, and every CLI command
+- Session tokens are shared with the Go version, so switching between the two does not log you out
 - One-line install: `curl -fsSL .../install.sh | LPORT_IMPL=rs sh`
 - realm is downloaded with the system's curl or wget (there is no built-in HTTPS client, to keep the binary small)
 
 The builtin backend uses far less memory than the Go version (about 15 MiB for 5000 TCP connections vs. 87 MiB; about 20 MiB for 4000 UDP sessions vs. 96 MiB) with similar throughput and latency. nftables / iptables forward in the kernel, so both versions perform the same there.
 
 ```sh
+cd web && npm ci && npm run build   # build the frontend first (embedded in the binary; a placeholder page is shown without it)
 cd rust && cargo build --release      # native build: rust/target/release/lport
 cd rust && cargo test                 # unit tests; integration tests need root, see rust/src/integration.rs
 scripts/build-rust.sh                 # cross-compile all architectures (needs cargo-zigbuild and zig) into release/lport-rs-*

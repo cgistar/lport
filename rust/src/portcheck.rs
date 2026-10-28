@@ -2,15 +2,22 @@ use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// 系统中一个被占用的端口。
-#[derive(Debug, Clone, Default, PartialEq)]
+/// 系统中一个被占用的端口，JSON 格式与 Go 版一致。
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct Listener {
     pub proto: &'static str,
     pub addr: String,
     pub port: i64,
+    #[serde(skip)]
     pub inode: u64,
+    #[serde(skip_serializing_if = "is_zero")]
     pub pid: i32,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub process: String,
+}
+
+fn is_zero(v: &i32) -> bool {
+    *v == 0
 }
 
 impl Listener {

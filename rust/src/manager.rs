@@ -18,11 +18,13 @@ use crate::{kernel, portcheck, probe, sysinfo};
 const MAINTAIN_INTERVAL: Duration = Duration::from_secs(60);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// 端口冲突信息。
-#[derive(Debug, Clone)]
+/// 端口冲突信息，JSON 格式与 Go 版一致。
+#[derive(Debug, Clone, Serialize)]
 pub struct Conflict {
     /// rule | panel | system
+    #[serde(rename = "type")]
     pub kind: &'static str,
+    pub proto: String,
     pub message: String,
 }
 
@@ -153,7 +155,6 @@ impl Manager {
             .map_or("offline", Backend::name)
     }
 
-    #[cfg(test)]
     pub async fn sync_error(&self) -> String {
         self.inner.lock().await.sync_err.clone()
     }
@@ -327,6 +328,110 @@ impl Manager {
         })
         .await
     }
+
+    pub async fn toggle(&self, id: &str, enabled: bool) -> Result<(), String> {
+        if enabled && let Some(r) = self.store.get().rules.iter().find(|r| r.id == id) {
+            let mut r = r.clone();
+            r.enabled = true;
+            self.check_resolvable(&r).await?;
+        }
+        self.mutate(id, |c, own| {
+            let i = find_rule(c, id)?;
+            let mut r = c.rules[i].clone();
+            r.enabled = enabled;
+            if enabled {
+                validate_rule(c, &mut r, own)?;
+            }
+            c.rules[i] = r;
+            Ok(())
+        })
+        .await
+    }
+
+    /// 重新应用规则（例如安装依赖后）。
+    pub async fn reapply(&self) -> Result<(), String> {
+        let mut inner = self.inner.lock().await;
+        inner.apply(&self.store.get().rules).await;
+        if inner.sync_err.is_empty() {
+            Ok(())
+        } else {
+            Err(inner.sync_err.clone())
+        }
+    }
+
+    /// 后端的运行模式（目前仅 nftables 有 map / linear 之分）。
+    pub async fn backend_mode(&self) -> &'static str {
+        self.inner
+            .lock()
+            .await
+            .backend
+            .as_ref()
+            .map_or("", Backend::mode)
+    }
+
+    /// 检查监听端口冲突。check_system 为 false 时只检查规则与面板端口。
+    pub async fn check_port(
+        &self,
+        proto: &str,
+        port: i64,
+        exclude_id: &str,
+        check_system: bool,
+    ) -> Vec<Conflict> {
+        let own = self.inner.lock().await.own_pids();
+        check_port(
+            &self.store.get(),
+            proto,
+            port,
+            exclude_id,
+            check_system,
+            &own,
+        )
+    }
+
+    /// 切换转发后端，失败时回滚到原后端。
+    pub async fn set_backend(&self, name: &str) -> Result<(), String> {
+        if !model::valid_backend(name) {
+            return Err(format!("未知后端: {name}"));
+        }
+        let mut inner = self.inner.lock().await;
+        if inner.backend.as_ref().is_some_and(|b| b.name() == name) {
+            return Ok(());
+        }
+        let mut nb = Backend::new(name).unwrap();
+        nb.available()?;
+        let cfg = self.store.get();
+        for r in &cfg.rules {
+            r.clone()
+                .validate(name)
+                .map_err(|e| format!("规则「{}」不适用于 {name} 后端: {e}", r.name))?;
+        }
+        // 旧后端清理失败时不能继续：残留的旧转发会与新后端同时生效。恢复旧后端的完整规则后返回错误
+        if let Some(Err(e)) = match inner.backend.as_mut() {
+            Some(b) => Some(b.cleanup().await),
+            None => None,
+        } {
+            inner.apply(&cfg.rules).await;
+            return Err(format!("切换到 {name} 失败: {e}"));
+        }
+        let eff = inner.effective(&cfg.rules);
+        let res = match nb.sync(&eff).await {
+            Err(e) => Err(format!("切换到 {name} 失败: {e}")),
+            Ok(()) => self.store.update(|c| {
+                c.backend = name.to_string();
+                Ok(())
+            }),
+        };
+        if let Err(e) = res {
+            if let Err(ce) = nb.cleanup().await {
+                crate::logln!("回滚时清除 {name} 转发规则失败: {ce}");
+            }
+            inner.apply(&cfg.rules).await;
+            return Err(e);
+        }
+        inner.backend = Some(nb);
+        inner.sync_err.clear();
+        Ok(())
+    }
 }
 
 impl Manager {
@@ -418,6 +523,7 @@ pub fn check_port(
         if r.id != exclude_id && r.listen_port == port && model::proto_overlap(&r.proto, proto) {
             out.push(Conflict {
                 kind: "rule",
+                proto: r.proto.clone(),
                 message: format!("与规则「{}」({}/{}) 冲突", r.name, r.proto, r.listen_port),
             });
         }
@@ -425,6 +531,7 @@ pub fn check_port(
     if port == config::panel_port(&cfg.listen) && model::proto_overlap(proto, model::PROTO_TCP) {
         out.push(Conflict {
             kind: "panel",
+            proto: model::PROTO_TCP.into(),
             message: "与管理面板端口冲突".into(),
         });
     }
@@ -453,6 +560,7 @@ pub fn check_port(
             };
             out.push(Conflict {
                 kind: "system",
+                proto: p.into(),
                 message: format!("{p} 端口 {port} 已被 {who} 占用 ({})", l.addr),
             });
             break;
@@ -460,6 +568,7 @@ pub fn check_port(
         if !found && let Err(e) = portcheck::bind_test(p, port) {
             out.push(Conflict {
                 kind: "system",
+                proto: p.into(),
                 message: format!("{p} 端口 {port} 无法绑定: {e}"),
             });
         }

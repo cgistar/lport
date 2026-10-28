@@ -148,14 +148,15 @@ scripts/deploy.sh -p 2222 root@host  # 指定 SSH 端口
 
 `rust/` 目录下是 Rust 重写版，与 Go 版并存，配置文件、命令行、systemd / OpenRC 服务文件完全兼容，可以直接互相替换；两个版本的 `lport list/add/edit/remove` 也能操作对方运行中的服务。
 
-- 已支持：全部四种转发后端（nftables / iptables / realm / builtin）、域名每 60 秒重新解析、规则被外部清除后自动修复、启动时清理残留规则，以及 `install` / `uninstall` / `start` / `stop` / `restart` / `probe` / `detect` 等全部命令行功能
-- 尚未移植：Web 管理面板，需要时请使用 Go 版
+- 功能与 Go 版相同：Web 管理面板（同一套前端，中英文）、全部四种转发后端、域名每 60 秒重新解析、规则被外部清除后自动修复、启动时清理残留规则，以及全部命令行功能
+- 会话 token 与 Go 版互通，两个版本互相替换后无需重新登录
 - 一键安装：`curl -fsSL .../install.sh | LPORT_IMPL=rs sh`
 - 下载 realm 时使用系统的 curl 或 wget（不内置 HTTPS 客户端，以保持二进制精简）
 
 builtin 后端的内存占用明显低于 Go 版（5000 条 TCP 长连接约 15 MiB，Go 版约 87 MiB；4000 个 UDP 会话约 20 MiB，Go 版约 96 MiB），吞吐与延迟相当；nftables / iptables 为内核转发，两个版本性能相同。
 
 ```sh
+cd web && npm ci && npm run build   # 先构建前端（嵌入二进制；未构建时面板显示占位页）
 cd rust && cargo build --release      # 本机编译，产物 rust/target/release/lport
 cd rust && cargo test                 # 单元测试；集成测试需 root，见 rust/src/integration.rs
 scripts/build-rust.sh                 # 交叉编译全部架构（需 cargo-zigbuild 与 zig），产物 release/lport-rs-*

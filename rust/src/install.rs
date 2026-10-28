@@ -246,15 +246,14 @@ pub fn cmd_install(args: &[String]) -> Result<(), String> {
 
     let c = store.get();
     println!(
-        "\n安装完成\n  程序:     {}\n  配置:     {cfg_path}\n  管理地址: 无（Rust 版暂无 Web 面板，请使用 lport 命令管理）\n  转发工具: {}\n  用户名:   {}",
+        "\n安装完成\n  程序:     {}\n  配置:     {cfg_path}\n  管理地址: http://{}\n  转发工具: {}\n  用户名:   {}",
         service::BIN_PATH,
+        c.listen,
         c.backend,
         c.admin.username
     );
     if !generated.is_empty() {
-        println!(
-            "  密码:     {generated}（随机生成，供日后 Web 面板使用，可执行 lport passwd 重置）"
-        );
+        println!("  密码:     {generated}（随机生成，请登录后修改，或执行 lport passwd 重置）");
     }
     if !install_svc {
         println!(

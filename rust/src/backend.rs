@@ -69,7 +69,6 @@ impl Backend {
     }
 
     /// 后端依赖的工具是否可用。
-    #[cfg(test)]
     pub fn available(&self) -> Result<(), String> {
         match self {
             Backend::Builtin(_) => Ok(()),
@@ -136,7 +135,6 @@ impl Backend {
     }
 
     /// 后端的运行模式（目前仅 nftables 有 map / linear 之分）。
-    #[allow(dead_code)]
     pub fn mode(&self) -> &'static str {
         match self {
             Backend::Nftables(b) => b.mode(),
@@ -149,9 +147,8 @@ pub fn check_tool(tool: &str) -> Result<(), String> {
     if sysinfo::tool_installed(tool) {
         Ok(())
     } else {
-        Err(format!(
-            "{tool} 未安装，请先安装（lport detect 查看安装命令）"
-        ))
+        // 与 Go 版文案一致；命令行可用 lport detect 查看安装命令
+        Err(format!("{tool} 未安装，请先在概览页安装"))
     }
 }
 
@@ -186,7 +183,14 @@ pub async fn run(stdin: &str, name: &str, args: &[&str]) -> Result<(), String> {
         child.wait_with_output().await.map_err(|e| e.to_string())
     };
     let out = match tokio::time::timeout(CMD_TIMEOUT, fut).await {
-        Err(_) => return Err(format!("{cmdline}: 执行超时（{}s）", CMD_TIMEOUT.as_secs())),
+        Err(_) => {
+            // 与 Go 版文案一致：名称与参数分别格式化（"%s %s: 执行超时（%s）"）
+            return Err(format!(
+                "{name} {}: 执行超时（{}s）",
+                args.join(" "),
+                CMD_TIMEOUT.as_secs()
+            ));
+        }
         Ok(Err(e)) => return Err(format!("{cmdline}: {e}")),
         Ok(Ok(out)) => out,
     };

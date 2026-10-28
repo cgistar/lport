@@ -11,7 +11,7 @@
 #   LPORT_VERSION=v0.2.0      指定版本（默认最新版）
 #   LPORT_LISTEN=0.0.0.0:8080 管理面板监听地址（仅首次安装）
 #   LPORT_BACKEND=builtin     转发后端 builtin | realm | nftables | iptables（仅首次安装）
-#   LPORT_IMPL=go             go（默认）| rs：安装 Rust 版（内存占用更低，暂无 Web 面板，配置与 Go 版通用）
+#   LPORT_IMPL=go             go（默认）| rs：安装 Rust 版（内存占用更低，功能与配置均与 Go 版相同）
 #
 # 例: curl -fsSL .../install.sh | LPORT_LISTEN=127.0.0.1:8080 sh
 #
@@ -128,12 +128,7 @@ if [ "$HOST" = 0.0.0.0 ] || [ -z "$HOST" ]; then
 fi
 
 printf "\n${C_GREEN}%s %s 安装完成${C_OFF}\n\n" "$PREFIX" "$VERSION"
-if [ "$IMPL" = rs ]; then
-  echo "  管理面板: 无（Rust 版暂无 Web 面板，使用 lport 命令管理）"
-  PUBLIC=0
-else
-  printf "  管理面板: http://%s:%s\n" "$HOST" "$PORT"
-fi
+printf "  管理面板: http://%s:%s\n" "$HOST" "$PORT"
 printf "  用户名:   %s\n" "${USERNAME:-admin}"
 if [ -n "$PASSWORD" ]; then
   printf "  密码:     ${C_YELLOW}%s${C_OFF}（随机生成，请登录后修改，或执行 lport passwd 重置）\n" "$PASSWORD"

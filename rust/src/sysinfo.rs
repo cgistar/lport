@@ -10,8 +10,8 @@ use std::sync::Mutex;
 /// 下载安装的工具（如 realm）所在目录。
 const DOWNLOAD_DIR: &str = "/usr/local/bin";
 
-/// 一个转发依赖工具。
-#[derive(Debug, Clone, Default)]
+/// 一个转发依赖工具，JSON 格式与 Go 版一致。
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct Tool {
     /// realm | iptables | nftables
     pub name: &'static str,
@@ -248,7 +248,7 @@ pub fn enable_ip_forward() -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct Info {
     pub os_id: String,
     pub os_like: String,

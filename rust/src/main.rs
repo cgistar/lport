@@ -1,8 +1,11 @@
+mod api;
+mod auth;
 mod backend;
 mod builtin;
 mod cli;
 mod config;
 mod ctl;
+mod i18n;
 mod install;
 #[cfg(test)]
 mod integration;
@@ -36,7 +39,7 @@ macro_rules! logln {
 const USAGE: &str = "lport - 端口转发管理工具 Rust 版 ({version})
 
 用法:
-  lport serve     [--config PATH] [--listen ADDR]   前台运行转发服务（暂无 Web 面板）
+  lport serve     [--config PATH] [--listen ADDR]   启动 Web 管理服务
   lport install   [--config PATH] [--listen ADDR] [--backend NAME] [-y]
                                                     安装程序与系统服务（交互式；-y 或无终端时使用默认值）
   lport uninstall [--config PATH] [--purge]         卸载系统服务，--purge 同时删除配置
@@ -52,8 +55,6 @@ const USAGE: &str = "lport - 端口转发管理工具 Rust 版 ({version})
   lport probe     [--config PATH] [规则名|ID|端口 ...] 检测规则连通性（本机经转发 / 直连目标）
   lport detect                                      检测系统环境与依赖工具
   lport version
-
-Web 管理面板尚未移植，需要时请使用 Go 版。
 
 默认配置文件: {config}
 ";
@@ -110,8 +111,11 @@ async fn cmd_serve(args: &[String]) -> Result<(), String> {
     if !sysinfo::is_root() {
         logln!("警告: 当前不是 root，iptables/nftables 后端、低端口和软件安装将不可用");
     }
-    let store = cli::load_config(fs.config(), fs.str("listen").unwrap_or_default())?;
-    let mgr = Arc::new(Manager::new(Arc::new(store)));
+    let store = Arc::new(cli::load_config(
+        fs.config(),
+        fs.str("listen").unwrap_or_default(),
+    )?);
+    let mgr = Arc::new(Manager::new(store.clone()));
     mgr.start().await;
 
     let sock = ctl::socket_path(mgr.store().path());
@@ -124,9 +128,27 @@ async fn cmd_serve(args: &[String]) -> Result<(), String> {
         }
         Err(e) => logln!("警告: 控制套接字启动失败，lport add/remove 将无法连接运行中的服务: {e}"),
     }
+
+    let listen = mgr.store().get().listen;
+    // 与 Go 一致：省略主机（如 :8080）时监听所有地址
+    let bind = if listen.starts_with(':') {
+        format!("0.0.0.0{listen}")
+    } else {
+        listen.clone()
+    };
+    let web = match tokio::net::TcpListener::bind(&bind).await {
+        Ok(l) => l,
+        Err(e) => {
+            mgr.stop().await;
+            let _ = std::fs::remove_file(&sock);
+            return Err(format!("Web 服务启动失败: listen tcp {listen}: {e}"));
+        }
+    };
+    let app = api::router(store, mgr.clone())
+        .into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let server = tokio::spawn(async move { axum::serve(web, app).await });
     logln!(
-        "lport {VERSION} (Rust) 已启动，转发规则 {} 条（配置: {}, 后端: {}）；Web 面板尚未移植",
-        mgr.store().get().rules.iter().filter(|r| r.enabled).count(),
+        "lport {VERSION} (Rust) 已启动: http://{listen}  (配置: {}, 后端: {})",
         mgr.store().path().display(),
         mgr.backend_name().await
     );
@@ -135,6 +157,16 @@ async fn cmd_serve(args: &[String]) -> Result<(), String> {
     let name = tokio::select! {
         _ = tokio::signal::ctrl_c() => "SIGINT",
         _ = term.recv() => "SIGTERM",
+        r = server => {
+            mgr.stop().await;
+            let _ = std::fs::remove_file(&sock);
+            let e = match r {
+                Ok(Err(e)) => e.to_string(),
+                Ok(Ok(())) => "服务已退出".into(),
+                Err(e) => e.to_string(),
+            };
+            return Err(format!("Web 服务异常退出: {e}"));
+        }
     };
     logln!("收到信号 {name}，正在停止并清理转发规则");
     mgr.stop().await;
