@@ -161,17 +161,19 @@ fn output_with_timeout(cmd: &mut Command, secs: u64) -> io::Result<(bool, String
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let (mut so, mut se) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
-    let t_out = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = so.read_to_string(&mut s);
-        s
-    });
-    let t_err = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = se.read_to_string(&mut s);
-        s
-    });
+    // 输出经 channel 收集：命令（或被杀掉的 shell）退出后，它启动的后代进程可能仍持有管道，
+    // 读取线程等不到 EOF；此时最多再等 2 秒，之后放弃剩余输出，不能让调用方无限阻塞
+    fn collect(mut r: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut b = Vec::new();
+            let _ = r.read_to_end(&mut b);
+            let _ = tx.send(String::from_utf8_lossy(&b).into_owned());
+        });
+        rx
+    }
+    let t_out = collect(child.stdout.take().unwrap());
+    let t_err = collect(child.stderr.take().unwrap());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     let status = loop {
         if let Some(st) = child.try_wait()? {
@@ -184,8 +186,10 @@ fn output_with_timeout(cmd: &mut Command, secs: u64) -> io::Result<(bool, String
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
-    let mut out = t_out.join().unwrap_or_default();
-    out.push_str(&t_err.join().unwrap_or_default());
+    let grace = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let left = || grace.saturating_duration_since(std::time::Instant::now());
+    let mut out = t_out.recv_timeout(left()).unwrap_or_default();
+    out.push_str(&t_err.recv_timeout(left()).unwrap_or_default());
     match status {
         Some(st) => Ok((st.success(), out)),
         None => Err(io::Error::new(
@@ -509,9 +513,17 @@ fn extract_staged(r: impl Read, binary: &str, dir: &Path) -> Result<PathBuf, Str
             }
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
             let tmp = dir.join(format!(".{binary}-{}", crate::config::new_id()));
+            let want = entry.size();
             let res = (|| {
                 let mut f = fs::File::create(&tmp)?;
-                io::copy(&mut (&mut entry).take(MAX_BINARY_SIZE), &mut f)?;
+                // tar 条目在流结束前被截断时 read 只返回 EOF，不会报错，需核对长度
+                let n = io::copy(&mut (&mut entry).take(MAX_BINARY_SIZE), &mut f)?;
+                if n != want {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        format!("{binary} 不完整（{n}/{want} 字节）"),
+                    ));
+                }
                 f.sync_all()
             })();
             if let Err(e) = res {
@@ -540,6 +552,31 @@ fn extract_staged(r: impl Read, binary: &str, dir: &Path) -> Result<PathBuf, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 命令退出后，后台子进程仍持有输出管道时不能无限等待
+    #[test]
+    fn output_does_not_wait_for_descendants() {
+        // 后台进程只睡 4 秒，测试结束后很快自行退出；读取等待上限为 2 秒
+        let limit = std::time::Duration::from_millis(3500);
+        let start = std::time::Instant::now();
+        let (ok, out) = output_with_timeout(
+            Command::new("sh").args(["-c", "echo hi; sleep 4 & exit 0"]),
+            10,
+        )
+        .unwrap();
+        assert!(ok);
+        assert!(start.elapsed() < limit, "等待了 {:?}", start.elapsed());
+        assert!(out.is_empty() || out.starts_with("hi"), "{out:?}");
+        let start = std::time::Instant::now();
+        let err = output_with_timeout(Command::new("sh").args(["-c", "sleep 4 & sleep 4"]), 1)
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            start.elapsed() < limit,
+            "超时后等待了 {:?}",
+            start.elapsed()
+        );
+    }
 
     #[test]
     fn os_family_and_pm() {
@@ -624,6 +661,32 @@ mod tests {
             extract(&tar_gz(&[("README", "x")])[..], "realm", &dir.0).is_err(),
             "缺少文件时应失败"
         );
+    }
+
+    // gzip 本身完整、CRC 正确，但 tar 条目声明的长度大于实际数据（发布包被截断后重新压缩等）：
+    // 不能把不完整的文件当作安装成功
+    #[test]
+    fn extract_truncated_entry() {
+        let dir = tmpdir();
+        let old = dir.0.join("realm");
+        fs::write(&old, "old").unwrap();
+        let mut h = tar::Header::new_gnu();
+        h.set_path("realm").unwrap();
+        h.set_size(1000);
+        h.set_mode(0o755);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        let mut raw = h.as_bytes().to_vec();
+        raw.extend_from_slice(b"only-ten-b");
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        io::Write::write_all(&mut gz, &raw).unwrap();
+        let data = gz.finish().unwrap();
+        assert!(
+            extract(&data[..], "realm", &dir.0).is_err(),
+            "条目被截断时应失败"
+        );
+        assert_eq!(fs::read_to_string(&old).unwrap(), "old", "已有版本被覆盖");
+        assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1, "残留临时文件");
     }
 
     // gzip 尾部（CRC）损坏时，即使 realm 已完整解出也不能覆盖已有版本，且不留下临时文件

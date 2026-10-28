@@ -152,10 +152,18 @@ async fn supervise(
             .stderr(Stdio::piped());
         // 独立进程组便于整组终止；lport 意外退出时子进程随之结束
         cmd.process_group(0);
-        // SAFETY: pre_exec 闭包在 fork 后的子进程中执行，prctl 是异步信号安全的
+        let parent = std::process::id() as libc::pid_t;
+        // SAFETY: pre_exec 闭包在 fork 后的子进程中执行，只调用异步信号安全的系统调用，不分配内存
         unsafe {
-            cmd.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+            cmd.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // 与 Go 的 SysProcAttr.Pdeathsig 一致：fork 之后、prctl 之前 lport 已退出时，
+                // 死亡信号不会补发，子进程已被重新托管，需自行结束
+                if libc::getppid() != parent {
+                    libc::kill(libc::getpid(), libc::SIGKILL);
+                }
                 Ok(())
             });
         }
@@ -166,7 +174,7 @@ async fn supervise(
                 let pid = child.id().unwrap_or(0) as i32;
                 st.lock().unwrap().pid = pid;
                 let tail = Arc::new(Mutex::new(TailBuffer::default()));
-                let reader = child.stderr.take().map(|mut e| {
+                let mut reader = child.stderr.take().map(|mut e| {
                     let tail = tail.clone();
                     tokio::spawn(async move {
                         let mut b = [0u8; 1024];
@@ -194,14 +202,21 @@ async fn supervise(
                                 kill_group(pid, libc::SIGKILL);
                                 let _ = child.wait().await;
                             }
+                            if let Some(r) = reader {
+                                r.abort();
+                            }
                             report(Err("stopped".into()));
                             return;
                         }
                     }
                 };
-                // 监听进程退出后，fork 出的子进程可能仍持有 stderr 管道，最多等 2 秒读取剩余输出
-                if let Some(r) = reader {
-                    let _ = timeout(Duration::from_secs(2), r).await;
+                // 监听进程退出后，fork 出的子进程可能仍持有 stderr 管道，最多等 2 秒读取剩余输出；
+                // 超时须中止读取任务，否则丢弃句柄只会让它在后台继续持有管道，每次重启泄漏一个描述符
+                if let Some(r) = reader.as_mut()
+                    && timeout(Duration::from_secs(2), &mut *r).await.is_err()
+                {
+                    r.abort();
+                    let _ = r.await;
                 }
                 let line = tail.lock().unwrap().last_line();
                 match (line.is_empty(), status) {
@@ -394,6 +409,22 @@ mod tests {
         }
     }
 
+    /// 读取脚本记录的后台子进程 pid；进程刚启动时脚本可能还没写入，稍等片刻。
+    async fn read_child(dir: &std::path::Path, pid: i32) -> i32 {
+        let path = dir.join(format!("child.{pid}"));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(n) = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+            {
+                return n;
+            }
+            assert!(Instant::now() < deadline, "脚本未写入 {}", path.display());
+            sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     fn alive(pid: i32) -> bool {
         // SAFETY: 信号 0 只检查进程是否存在
         unsafe { libc::kill(pid, 0) == 0 }
@@ -417,16 +448,13 @@ mod tests {
     // 正常运行、崩溃后自动重启、停止时整个进程组（含 fork 出的子进程）被终止
     #[tokio::test]
     async fn supervise_restart_and_stop() {
-        let (mut b, dir) = fake("sleep 300 & echo $! > \"$(dirname \"$0\")/child.$$\"; sleep 300");
+        let (mut b, dir) =
+            fake("sleep 300 & echo $! > \"$(dirname \"$0\")/child.$$\"; exec sleep 300");
         b.sync(&[rule("tcp")]).await.unwrap();
         let st = &b.status()["r"];
         assert_eq!((st.state.as_str(), st.pids.len()), ("running", 1), "{st:?}");
         let pid = st.pids[0];
-        let child: i32 = std::fs::read_to_string(dir.join(format!("child.{pid}")))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        let child = read_child(&dir, pid).await;
         assert!(alive(child));
 
         // 主进程被杀后自动重启：fork 出的子进程仍持有 stderr，最多等 2 秒，再退避 1 秒
@@ -443,11 +471,7 @@ mod tests {
             sleep(Duration::from_millis(50)).await;
         }
         let pid2 = b.pids()[0];
-        let child2: i32 = std::fs::read_to_string(dir.join(format!("child.{pid2}")))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        let child2 = read_child(&dir, pid2).await;
 
         b.cleanup().await;
         sleep(Duration::from_millis(100)).await;
@@ -473,6 +497,46 @@ mod tests {
         assert_eq!(
             realm_args(&r("both", 5353, "10.0.0.6:53"), "udp").join(" "),
             "-l 0.0.0.0:5353 -r 10.0.0.6:53 -u -t --udp-timeout 120"
+        );
+    }
+
+    fn pipe_fds() -> usize {
+        std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                std::fs::read_link(e.path()).is_ok_and(|l| l.to_string_lossy().starts_with("pipe:"))
+            })
+            .count()
+    }
+
+    // 后台子进程一直持有 stderr 时，反复重启不能累积读取任务与管道描述符
+    #[tokio::test]
+    async fn restart_does_not_leak_stderr_reader() {
+        let (mut b, dir) =
+            fake("sleep 30 & echo $! >> \"$(dirname \"$0\")/kids\"; sleep 0.6; exit 1");
+        b.sync(&[rule("tcp")]).await.unwrap();
+        let mut counts = Vec::new();
+        for _ in 0..3 {
+            let r = b.status()["r"].restarts;
+            while b.status()["r"].restarts == r {
+                sleep(Duration::from_millis(50)).await;
+            }
+            counts.push(pipe_fds());
+        }
+        b.cleanup().await;
+        for pid in std::fs::read_to_string(dir.join("kids"))
+            .unwrap()
+            .split_whitespace()
+        {
+            // SAFETY: 测试脚本启动的后台进程
+            unsafe { libc::kill(pid.parse().unwrap(), libc::SIGKILL) };
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+        // 其它并发测试也会打开管道，只要求不随重启次数单调增长
+        assert!(
+            !(counts[0] < counts[1] && counts[1] < counts[2]),
+            "每次重启后管道 fd 持续增长: {counts:?}"
         );
     }
 
