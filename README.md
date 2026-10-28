@@ -146,7 +146,7 @@ cargo build --release                # output: target/release/lport
 cargo test                           # unit tests; integration tests need root, see src/integration.rs
 ```
 
-Pushing a `v*` tag (e.g. `git tag v1.0.0 && git push origin v1.0.0`) makes GitHub Actions test, build, and publish a release.
+GitHub Actions runs the tests when you push to main. Pushing a `v*` tag afterwards (e.g. `git tag v1.0.0 && git push origin v1.0.0`) checks that the commit passed CI on main, then cross-compiles and publishes a release.
 
 ### Versions
 

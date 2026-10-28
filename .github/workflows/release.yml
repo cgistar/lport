@@ -3,6 +3,8 @@
 # 触发方式:
 #   - 推送 v 开头的 tag（如 v1.0.0）：编译全部架构并创建 Release；tag 含 "-"（如 v1.0.0-rc1）时标记为预发布
 #   - 手动运行（Actions 页面 Run workflow）：只编译并上传为构建产物，不创建 Release
+#
+# 不重复运行测试：要求该 commit 已在 main 上且 main 的 CI（ci.yml）已通过；CI 仍在运行时等待其结束。
 name: release
 
 on:
@@ -12,14 +14,39 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
-  # 先跑完整的单元测试与集成测试，通过后才编译发布
-  ci:
-    uses: ./.github/workflows/ci.yml
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: 确认 commit 已在 main 上
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$GITHUB_SHA 不在 main 分支上，请先合并到 main 再打 tag"; exit 1; }
+
+      # 同时推送 main 与 tag 时 CI 可能刚开始，最多等 2 分钟出现，再等待其结束
+      - name: 等待 main 上的 CI 通过
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 24); do
+            id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push \
+              --commit "$GITHUB_SHA" --json databaseId --jq '.[0].databaseId // empty')
+            [[ -n "$id" ]] && break
+            sleep 5
+          done
+          [[ -n "$id" ]] || { echo "::error::没有找到 $GITHUB_SHA 在 main 上的 CI 运行"; exit 1; }
+          echo "CI 运行: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$id"
+          gh run watch "$id" --repo "$GITHUB_REPOSITORY" --interval 30 --exit-status > /dev/null \
+            || { echo "::error::main 上的 CI 未通过，不发布"; exit 1; }
 
   build:
-    needs: ci
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

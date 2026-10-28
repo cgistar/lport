@@ -146,7 +146,7 @@ cargo build --release              # 产物 target/release/lport
 cargo test                         # 单元测试；集成测试需 root，见 src/integration.rs
 ```
 
-推送 `v*` tag（如 `git tag v1.0.0 && git push origin v1.0.0`）会由 GitHub Actions 自动测试、编译并发布 Release。
+推送 main 时 GitHub Actions 运行测试；之后推送 `v*` tag（如 `git tag v1.0.0 && git push origin v1.0.0`），确认该 commit 在 main 上的测试已通过后，自动交叉编译并发布 Release。
 
 ### 版本说明
 

@@ -1,13 +1,11 @@
-# 持续集成：格式 / lint / 单元测试、多架构交叉编译，以及真实内核上的集成测试
-# （root、网络命名空间、nftables/iptables/realm/内置转发）。
-# 推送 main、提交 PR 时运行；发布流程（release.yml）也会先调用本工作流。
+# 持续集成：格式 / lint / 单元测试，以及真实内核上的集成测试（root、网络命名空间、nftables/iptables/realm/内置转发）。
+# 推送 main、提交 PR 时运行。多架构交叉编译只在发布时进行（release.yml），发布前会要求该 commit 在 main 上的 CI 已通过。
 name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
-  workflow_call:
 
 permissions:
   contents: read
@@ -42,34 +40,6 @@ jobs:
 
       - name: 单元测试
         run: cargo test --locked
-
-  # 发布前确认全部目标架构都能编译（发布流程会再完整编译一次）
-  cross:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf,arm-unknown-linux-musleabihf,i686-unknown-linux-musl
-
-      # 直接安装官方 zig 包（mlugg/setup-zig 仍运行在已废弃的 Node.js 20 上），固定版本保证构建可复现
-      - name: 安装 zig
-        run: |
-          curl -fsSL https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz | tar -xJ -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/zig-x86_64-linux-0.14.1" >> "$GITHUB_PATH"
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-zigbuild
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: 交叉编译
-        run: |
-          for t in aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf arm-unknown-linux-musleabihf i686-unknown-linux-musl; do
-            cargo zigbuild --locked --release --target "$t"
-          done
 
   integration:
     runs-on: ubuntu-latest
