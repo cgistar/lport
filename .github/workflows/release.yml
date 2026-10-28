@@ -1,4 +1,4 @@
-# 交叉编译 lport（Go 版 lport-* 与 Rust 版 lport-rs-*）并发布到 GitHub Releases。
+# 交叉编译 lport 并发布到 GitHub Releases。
 #
 # 触发方式:
 #   - 推送 v 开头的 tag（如 v1.0.0）：编译全部架构并创建 Release；tag 含 "-"（如 v1.0.0-rc1）时标记为预发布
@@ -26,31 +26,11 @@ jobs:
         with:
           fetch-depth: 0 # git describe 需要完整历史与 tag
 
-      - uses: actions/setup-go@v6
-        with:
-          # 发布用最新稳定版编译（含安全修复）；go.mod 中的版本只是最低要求，由 CI 验证
-          go-version: stable
-
       - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-
-      - name: 确定版本号
-        id: version
-        run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=$(git describe --tags --always)-$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
-          fi
-
-      # 构建前端 → go test → 交叉编译 amd64 / arm64 / armv7 / armv6 / 386，产物位于 release/
-      - name: 编译
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: scripts/build.sh
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -63,14 +43,21 @@ jobs:
           tool: cargo-zigbuild
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
 
-      # cargo test → 用 zig 交叉编译 musl 静态二进制，产物 release/lport-rs-* 与 sha256sums-rs.txt
-      - name: 编译 Rust 版
+      - name: 确定版本号
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(git describe --tags --always)-$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 构建前端 → cargo test → 用 zig 交叉编译 amd64 / arm64 / armv7 / armv6 / 386 的 musl 静态二进制，产物位于 release/
+      - name: 编译
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: scripts/build-rust.sh
+        run: scripts/build.sh
 
       - name: 检查产物
         env:
@@ -78,16 +65,21 @@ jobs:
         run: |
           cd release
           sha256sum -c sha256sums.txt
-          sha256sum -c sha256sums-rs.txt
           for f in lport-*.tar.gz; do
             tar -tzf "$f" | grep -q '/lport$' || { echo "$f 中缺少 lport"; exit 1; }
           done
-          # 在 runner 上实际运行 amd64 版本做冒烟测试（lport-* 通配也会匹配 lport-rs-*，须分开取）
+          # 在 runner 上实际运行 amd64 版本做冒烟测试
           tar -xzf "lport-${VERSION}-linux-amd64.tar.gz" -O --wildcards '*/lport' > /tmp/lport
-          chmod +x /tmp/lport && /tmp/lport version && /tmp/lport detect
-          tar -xzf "lport-rs-${VERSION}-linux-amd64.tar.gz" -O --wildcards '*/lport' > /tmp/lport-rs
-          chmod +x /tmp/lport-rs && /tmp/lport-rs version && /tmp/lport-rs detect
-          file /tmp/lport-rs | grep -q 'statically linked' || { echo "lport-rs 不是静态链接"; exit 1; }
+          chmod +x /tmp/lport
+          file /tmp/lport | grep -q 'statically linked' || { echo "lport 不是静态链接"; exit 1; }
+          [[ "$(/tmp/lport version)" == "$VERSION" ]] || { echo "版本号不符: $(/tmp/lport version)"; exit 1; }
+          /tmp/lport detect
+          # 嵌入的是真实前端，而不是未构建时的占位页
+          printf 'listen: 127.0.0.1:18999\nbackend: builtin\nadmin: {password: smoke-test}\n' > /tmp/lport.yaml
+          /tmp/lport serve --config /tmp/lport.yaml & pid=$!
+          for i in $(seq 50); do curl -sf -o /tmp/index.html http://127.0.0.1:18999/ && break; sleep 0.1; done
+          kill "$pid"
+          grep -q 'assets/index-' /tmp/index.html || { echo "前端未嵌入"; cat /tmp/index.html; exit 1; }
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
@@ -106,7 +98,7 @@ jobs:
           [[ "$TAG" == *-* ]] && flags+=(--prerelease)
           if gh release view "$TAG" >/dev/null 2>&1; then
             # 重新运行时覆盖已有产物
-            gh release upload "$TAG" release/*.tar.gz release/sha256sums.txt release/sha256sums-rs.txt --clobber
+            gh release upload "$TAG" release/*.tar.gz release/sha256sums.txt --clobber
           else
-            gh release create "$TAG" release/*.tar.gz release/sha256sums.txt release/sha256sums-rs.txt "${flags[@]}"
+            gh release create "$TAG" release/*.tar.gz release/sha256sums.txt "${flags[@]}"
           fi

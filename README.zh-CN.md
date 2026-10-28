@@ -124,7 +124,7 @@ lport 只信任来自回环地址（即同机代理）的 `X-Forwarded-For`（�
 
 | | nftables | iptables | realm | builtin |
 |---|---|---|---|---|
-| 性能 | 最高（内核转发，map 查找） | 高（内核转发） | 中（用户态，Rust 异步） | 中（用户态，Go） |
+| 性能 | 最高（内核转发，map 查找） | 高（内核转发） | 中（用户态，Rust 异步） | 中（用户态，Rust 异步，splice 零拷贝） |
 | 目标为本机 127.0.0.1 | 不支持 | 不支持 | 支持 | 支持 |
 | 依赖 | nftables | iptables | realm（自动下载） | 无 |
 | 适用 | 新系统首选 | 老系统（如 CentOS 7） | 本机端口，或无法使用内核 NAT 时 | 非 root 运行，或无法安装任何工具时 |
@@ -133,31 +133,25 @@ socat 后端已移除；配置为 `backend: socat` 时，启动后会自动改�
 
 ## 从源码构建
 
-需要 Go 与 Node.js：
+需要 Rust（rustup）与 Node.js；交叉编译还需要 [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) 与 zig：
 
 ```sh
-scripts/build.sh                # 编译全部架构到 release/
+scripts/build.sh                # 构建前端并交叉编译全部架构到 release/
 scripts/build.sh amd64 arm64    # 只编译指定架构
 scripts/deploy.sh root@host     # 编译并部署到远程服务器
 scripts/deploy.sh -p 2222 root@host  # 指定 SSH 端口
+
+cd web && npm ci && npm run build  # 本机开发：先构建前端（编译时嵌入二进制，未构建时面板显示占位页）
+cargo build --release              # 产物 target/release/lport
+cargo test                         # 单元测试；集成测试需 root，见 src/integration.rs
 ```
 
 推送 `v*` tag（如 `git tag v1.0.0 && git push origin v1.0.0`）会由 GitHub Actions 自动测试、编译并发布 Release。
 
-### Rust 版
+### 版本说明
 
-`rust/` 目录下是 Rust 重写版，与 Go 版并存，配置文件、命令行、systemd / OpenRC 服务文件完全兼容，可以直接互相替换；两个版本的 `lport list/add/edit/remove` 也能操作对方运行中的服务。
+v0.3.0 起 lport 由 Go 改为 Rust 实现，功能、配置文件、命令行、Web 界面与 systemd / OpenRC 服务文件与之前完全相同，直接用一键安装脚本或 `lport install` 升级即可，已登录的会话也保持有效。v0.2.0 及以前的 Go 源码保留在 git 历史中。
 
-- 功能与 Go 版相同：Web 管理面板（同一套前端，中英文）、全部四种转发后端、域名每 60 秒重新解析、规则被外部清除后自动修复、启动时清理残留规则，以及全部命令行功能
-- 会话 token 与 Go 版互通，两个版本互相替换后无需重新登录
-- 一键安装：`curl -fsSL .../install.sh | LPORT_IMPL=rs sh`
+- builtin 后端内存占用显著降低：5000 条 TCP 长连接约 15 MiB（Go 版约 87 MiB），4000 个 UDP 会话约 20 MiB（Go 版约 96 MiB），吞吐与延迟相当；nftables / iptables 为内核转发，性能不变
+- 二进制约 3 MB（Go 版约 9 MB），服务空闲时内存约 2 MiB
 - 下载 realm 时使用系统的 curl 或 wget（不内置 HTTPS 客户端，以保持二进制精简）
-
-builtin 后端的内存占用明显低于 Go 版（5000 条 TCP 长连接约 15 MiB，Go 版约 87 MiB；4000 个 UDP 会话约 20 MiB，Go 版约 96 MiB），吞吐与延迟相当；nftables / iptables 为内核转发，两个版本性能相同。
-
-```sh
-cd web && npm ci && npm run build   # 先构建前端（嵌入二进制；未构建时面板显示占位页）
-cd rust && cargo build --release      # 本机编译，产物 rust/target/release/lport
-cd rust && cargo test                 # 单元测试；集成测试需 root，见 rust/src/integration.rs
-scripts/build-rust.sh                 # 交叉编译全部架构（需 cargo-zigbuild 与 zig），产物 release/lport-rs-*
-```

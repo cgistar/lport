@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+name="lport"
+description="lport port forwarding manager"
+command="/usr/local/bin/lport"
+command_args="serve --config /etc/lport/config.yaml"
+supervisor=supervise-daemon
+output_log="/var/log/lport.log"
+error_log="/var/log/lport.log"
+
+depend() {
+	need net
+	after firewall
+}

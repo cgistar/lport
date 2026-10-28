@@ -1,0 +1,14 @@
+[Unit]
+Description=lport port forwarding manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lport serve --config /etc/lport/config.yaml
+Restart=on-failure
+RestartSec=3
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

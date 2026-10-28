@@ -124,7 +124,7 @@ lport trusts `X-Forwarded-For` (for the login rate limit) and `X-Forwarded-Proto
 
 | | nftables | iptables | realm | builtin |
 |---|---|---|---|---|
-| Performance | Highest (in-kernel, map lookup) | High (in-kernel) | Medium (user space, async Rust) | Medium (user space, Go) |
+| Performance | Highest (in-kernel, map lookup) | High (in-kernel) | Medium (user space, async Rust) | Medium (user space, async Rust, zero-copy splice) |
 | Target on local 127.0.0.1 | Not supported | Not supported | Supported | Supported |
 | Dependencies | nftables | iptables | realm (downloaded) | None |
 | Best for | Modern systems | Older systems (e.g. CentOS 7) | Local ports, or when kernel NAT is unavailable | No root, or nothing can be installed |
@@ -133,31 +133,25 @@ The socat backend has been removed; a configuration with `backend: socat` is swi
 
 ## Building from source
 
-Requires Go and Node.js:
+Requires Rust (rustup) and Node.js; cross-compiling also needs [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) and zig:
 
 ```sh
-scripts/build.sh                     # build all architectures into release/
+scripts/build.sh                     # build the frontend and all architectures into release/
 scripts/build.sh amd64 arm64         # build selected architectures only
 scripts/deploy.sh root@host          # build and deploy to a remote server
 scripts/deploy.sh -p 2222 root@host  # use a custom SSH port
+
+cd web && npm ci && npm run build    # local development: build the frontend first (embedded at compile time; a placeholder page is shown without it)
+cargo build --release                # output: target/release/lport
+cargo test                           # unit tests; integration tests need root, see src/integration.rs
 ```
 
 Pushing a `v*` tag (e.g. `git tag v1.0.0 && git push origin v1.0.0`) makes GitHub Actions test, build, and publish a release.
 
-### Rust version
+### Versions
 
-`rust/` contains a Rust rewrite that lives alongside the Go version. Config files, the CLI and the systemd / OpenRC service files are fully compatible, so either binary can replace the other in place, and `lport list/add/edit/remove` from either version can drive a running service of the other.
+Starting with v0.3.0, lport is written in Rust instead of Go. Features, the config file, the CLI, the web UI and the systemd / OpenRC service files are unchanged, so upgrade with the one-line install script or `lport install` as usual; existing login sessions stay valid. The Go source of v0.2.0 and earlier remains in the git history.
 
-- Same features as the Go version: the web panel (same frontend, Chinese and English), all four backends, re-resolving domains every 60 seconds, repairing rules removed by someone else, cleaning up leftover rules on startup, and every CLI command
-- Session tokens are shared with the Go version, so switching between the two does not log you out
-- One-line install: `curl -fsSL .../install.sh | LPORT_IMPL=rs sh`
+- The builtin backend uses far less memory: about 15 MiB for 5000 TCP connections (Go: about 87 MiB) and about 20 MiB for 4000 UDP sessions (Go: about 96 MiB), with similar throughput and latency. nftables / iptables forward in the kernel, so their performance is unchanged
+- The binary is about 3 MB (Go: about 9 MB) and the idle service uses about 2 MiB of memory
 - realm is downloaded with the system's curl or wget (there is no built-in HTTPS client, to keep the binary small)
-
-The builtin backend uses far less memory than the Go version (about 15 MiB for 5000 TCP connections vs. 87 MiB; about 20 MiB for 4000 UDP sessions vs. 96 MiB) with similar throughput and latency. nftables / iptables forward in the kernel, so both versions perform the same there.
-
-```sh
-cd web && npm ci && npm run build   # build the frontend first (embedded in the binary; a placeholder page is shown without it)
-cd rust && cargo build --release      # native build: rust/target/release/lport
-cd rust && cargo test                 # unit tests; integration tests need root, see rust/src/integration.rs
-scripts/build-rust.sh                 # cross-compile all architectures (needs cargo-zigbuild and zig) into release/lport-rs-*
-```
