@@ -3,3 +3,4 @@ dev-config.yaml
 web/node_modules/
 web/dist/
 release/
+rust/target/

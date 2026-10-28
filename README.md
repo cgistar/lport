@@ -143,3 +143,17 @@ scripts/deploy.sh -p 2222 root@host  # use a custom SSH port
 ```
 
 Pushing a `v*` tag (e.g. `git tag v1.0.0 && git push origin v1.0.0`) makes GitHub Actions test, build, and publish a release.
+
+### Rust version (in progress)
+
+`rust/` contains a Rust rewrite that lives alongside the Go version. Config files and the CLI are fully compatible, and `lport list/add/edit/remove` from either version can drive a running service of the other. Phase one is done:
+
+- Supported: `serve` (builtin backend only), `list` / `add` / `edit` / `remove` / `passwd` / `version`
+- Not yet ported: web panel, nftables / iptables / realm backends, `install` / `probe` / `detect`, etc. Keep using the Go version for these
+
+Compared with the Go builtin backend, it uses far less memory at the same throughput (about 15 MiB for 5000 TCP connections vs. 87 MiB for Go; about 20 MiB for 4000 UDP sessions vs. 96 MiB).
+
+```sh
+cd rust && cargo build --release      # native build: rust/target/release/lport
+scripts/build-rust.sh                 # cross-compile all architectures (needs cargo-zigbuild) into release/lport-rs-*
+```

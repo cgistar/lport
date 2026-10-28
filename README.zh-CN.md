@@ -143,3 +143,17 @@ scripts/deploy.sh -p 2222 root@host  # 指定 SSH 端口
 ```
 
 推送 `v*` tag（如 `git tag v1.0.0 && git push origin v1.0.0`）会由 GitHub Actions 自动测试、编译并发布 Release。
+
+### Rust 版（开发中）
+
+`rust/` 目录下是 Rust 重写版，与 Go 版并存、配置文件与命令行完全兼容（两个版本的 `lport list/add/edit/remove` 可以互相操作对方运行中的服务）。目前完成第一阶段：
+
+- 已支持：`serve`（仅 builtin 后端）、`list` / `add` / `edit` / `remove` / `passwd` / `version`
+- 尚未移植：Web 面板、nftables / iptables / realm 后端、`install` / `probe` / `detect` 等，请继续使用 Go 版
+
+相比 Go 版 builtin，同样的转发吞吐下内存占用明显更低（5000 条 TCP 长连接约 15 MiB，Go 版约 87 MiB；4000 个 UDP 会话约 20 MiB，Go 版约 96 MiB）。
+
+```sh
+cd rust && cargo build --release      # 本机编译，产物 rust/target/release/lport
+scripts/build-rust.sh                 # 交叉编译全部架构（需 cargo-zigbuild），产物 release/lport-rs-*
+```
