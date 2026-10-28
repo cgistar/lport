@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use crate::config::{self, Store};
 use crate::ctl::{self, CtlError};
-use crate::manager::{Manager, RuleView};
+use crate::manager::{Manager, ProbeResult, RuleView};
 use crate::model::{self, Rule};
-use crate::service;
+use crate::{probe, service};
 
 /// 命令行选项，语义同 Go flag 包：-x 与 --x 等价，值可用 `-x v` 或 `-x=v`，
 /// 选项可出现在位置参数之后（如 lport add 8080 1.2.3.4:80 --proto udp），`--` 之后全部为位置参数。
@@ -82,7 +82,7 @@ impl Flags {
 /// 规则增删查：服务运行中时经控制套接字由服务执行（立即生效），否则直接修改配置文件。
 pub enum RuleOps {
     Online(ctl::Client),
-    Offline(Manager),
+    Offline(Box<Manager>),
 }
 
 impl RuleOps {
@@ -110,7 +110,9 @@ impl RuleOps {
             ));
         }
         let store = load_config(cfg_path, "")?;
-        Ok(RuleOps::Offline(Manager::offline(Arc::new(store))))
+        Ok(RuleOps::Offline(Box::new(Manager::offline(Arc::new(
+            store,
+        )))))
     }
 
     pub fn online(&self) -> bool {
@@ -393,6 +395,114 @@ pub async fn cmd_remove(args: &[String]) -> Result<(), String> {
         println!("服务未运行，已从配置中删除");
     }
     Ok(())
+}
+
+fn probe_label(state: &str) -> (&'static str, &'static str) {
+    match state {
+        probe::STATE_OK => ("32", "成功"),
+        probe::STATE_FAIL => ("31", "失败"),
+        probe::STATE_UNKNOWN => ("33", "无法确定"),
+        _ => ("90", "跳过"),
+    }
+}
+
+fn worst(items: &[probe::Check]) -> &'static str {
+    let mut s = probe::STATE_OK;
+    for it in items {
+        if it.state == probe::STATE_FAIL {
+            return probe::STATE_FAIL;
+        }
+        if it.state != probe::STATE_OK {
+            s = it.state;
+        }
+    }
+    s
+}
+
+fn probe_hint(res: &ProbeResult) -> &'static str {
+    match (worst(&res.local), worst(&res.target)) {
+        (probe::STATE_FAIL, probe::STATE_OK) => {
+            "目标可达但经本机转发失败：请检查规则状态、转发后端与防火墙"
+        }
+        (_, probe::STATE_FAIL) => "本机无法直连目标：目标服务未启动、地址错误或目标防火墙拦截",
+        (probe::STATE_OK, probe::STATE_OK) => {
+            "本机检测不经过 FORWARD 链；若外部仍无法访问，请检查云安全组与 FORWARD 防火墙规则"
+        }
+        _ => "",
+    }
+}
+
+/// 在命令行检测规则连通性；只读配置，不影响运行中的服务。
+pub async fn cmd_probe(args: &[String]) -> Result<(), String> {
+    let fs = Flags::parse(args, &[("config", false)])?;
+    let (store, _) = Store::load_no_save(fs.config())?;
+    let cfg = store.get();
+    let rules = select_rules(&cfg.rules, &fs.pos)?;
+    if rules.is_empty() {
+        println!("没有转发规则");
+        return Ok(());
+    }
+    let mgr = Manager::offline(Arc::new(store));
+    let results = futures_util::future::join_all(rules.iter().map(|r| mgr.probe(&r.id))).await;
+
+    // SAFETY: isatty 只查询描述符
+    let color = unsafe { libc::isatty(1) == 1 };
+    let paint = |code: &str, s: &str| {
+        if color {
+            format!("\x1b[{code}m{s}\x1b[0m")
+        } else {
+            s.to_string()
+        }
+    };
+    let mut failed = false;
+    for (r, res) in rules.iter().zip(results) {
+        let state = if r.enabled { "启用" } else { "停用" };
+        println!(
+            "{}  {} :{} → {}  [{}, {state}]",
+            paint("1", &r.name),
+            r.proto,
+            r.listen_port,
+            r.target,
+            cfg.backend
+        );
+        let res = match res {
+            Ok(res) => res,
+            Err(e) => {
+                println!("  {} {e}", paint("31", "●"));
+                failed = true;
+                continue;
+            }
+        };
+        for (label, items) in [("本机", &res.local), ("目标", &res.target)] {
+            for it in items {
+                let (code, text) = probe_label(it.state);
+                let latency = if it.state == probe::STATE_OK || it.state == probe::STATE_FAIL {
+                    format!("{}ms", it.latency_ms)
+                } else {
+                    String::new()
+                };
+                println!(
+                    "  {label}  {} {} {:<3} {:<22} {latency:>6}  {}",
+                    paint(code, "●"),
+                    pad_width(text, 8),
+                    it.proto,
+                    it.addr,
+                    it.message
+                );
+                failed |= it.state == probe::STATE_FAIL;
+            }
+        }
+        let hint = probe_hint(&res);
+        if !hint.is_empty() {
+            println!("  {}", paint("90", &format!("提示: {hint}")));
+        }
+        println!();
+    }
+    if failed {
+        Err("存在检测失败的项".into())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-# 交叉编译 lport 并发布到 GitHub Releases。
+# 交叉编译 lport（Go 版 lport-* 与 Rust 版 lport-rs-*）并发布到 GitHub Releases。
 #
 # 触发方式:
 #   - 推送 v 开头的 tag（如 v1.0.0）：编译全部架构并创建 Release；tag 含 "-"（如 v1.0.0-rc1）时标记为预发布
@@ -52,16 +52,42 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: scripts/build.sh
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf,arm-unknown-linux-musleabihf,i686-unknown-linux-musl
+
+      - uses: mlugg/setup-zig@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      # cargo test → 用 zig 交叉编译 musl 静态二进制，产物 release/lport-rs-* 与 sha256sums-rs.txt
+      - name: 编译 Rust 版
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/build-rust.sh
+
       - name: 检查产物
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           cd release
           sha256sum -c sha256sums.txt
+          sha256sum -c sha256sums-rs.txt
           for f in lport-*.tar.gz; do
             tar -tzf "$f" | grep -q '/lport$' || { echo "$f 中缺少 lport"; exit 1; }
           done
-          # 在 runner 上实际运行 amd64 版本做冒烟测试
-          tar -xzf lport-*-linux-amd64.tar.gz -O --wildcards '*/lport' > /tmp/lport
+          # 在 runner 上实际运行 amd64 版本做冒烟测试（lport-* 通配也会匹配 lport-rs-*，须分开取）
+          tar -xzf "lport-${VERSION}-linux-amd64.tar.gz" -O --wildcards '*/lport' > /tmp/lport
           chmod +x /tmp/lport && /tmp/lport version && /tmp/lport detect
+          tar -xzf "lport-rs-${VERSION}-linux-amd64.tar.gz" -O --wildcards '*/lport' > /tmp/lport-rs
+          chmod +x /tmp/lport-rs && /tmp/lport-rs version && /tmp/lport-rs detect
+          file /tmp/lport-rs | grep -q 'statically linked' || { echo "lport-rs 不是静态链接"; exit 1; }
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
@@ -80,7 +106,7 @@ jobs:
           [[ "$TAG" == *-* ]] && flags+=(--prerelease)
           if gh release view "$TAG" >/dev/null 2>&1; then
             # 重新运行时覆盖已有产物
-            gh release upload "$TAG" release/*.tar.gz release/sha256sums.txt --clobber
+            gh release upload "$TAG" release/*.tar.gz release/sha256sums.txt release/sha256sums-rs.txt --clobber
           else
-            gh release create "$TAG" release/*.tar.gz release/sha256sums.txt "${flags[@]}"
+            gh release create "$TAG" release/*.tar.gz release/sha256sums.txt release/sha256sums-rs.txt "${flags[@]}"
           fi

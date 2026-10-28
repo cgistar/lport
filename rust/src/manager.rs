@@ -1,17 +1,22 @@
-//! 编排配置存储与转发后端，对应 Go 版 internal/manager 的规则管理部分。
+//! 编排配置存储与转发后端，对应 Go 版 internal/manager。
 
 use std::collections::HashMap;
-use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
-use crate::builtin::{Builtin, RuleStatus};
+use crate::backend::{Backend, RuleStatus};
 use crate::config::{self, Config, Store};
 use crate::model::{self, Rule};
-use crate::portcheck;
+use crate::{kernel, portcheck, probe, sysinfo};
+
+/// 内核后端重新解析域名、修复规则的间隔。
+const MAINTAIN_INTERVAL: Duration = Duration::from_secs(60);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// 端口冲突信息。
 #[derive(Debug, Clone)]
@@ -52,7 +57,7 @@ pub fn rule_json(r: &Rule) -> Value {
 
 struct Inner {
     /// None 表示离线模式：只修改配置、不应用转发
-    backend: Option<Builtin>,
+    backend: Option<Backend>,
     sync_err: String,
     /// 启动时与系统已占用端口冲突的规则（rule id → 冲突说明），暂不应用；编辑该规则时重新校验
     blocked: HashMap<String, String>,
@@ -90,18 +95,31 @@ impl Inner {
 
     /// 本工具的转发进程 pid，其占用的端口不算系统占用（规则间冲突另行检查）。
     fn own_pids(&self) -> Vec<i32> {
-        self.backend.as_ref().map(Builtin::pids).unwrap_or_default()
+        self.backend.as_ref().map(Backend::pids).unwrap_or_default()
     }
 }
 
 pub struct Manager {
     store: Arc<Store>,
     inner: Mutex<Inner>,
+    stop: CancellationToken,
+}
+
+/// 规则连通性检测结果。
+#[derive(Debug, Serialize)]
+pub struct ProbeResult {
+    /// 经本机监听端口（走转发路径）
+    pub local: Vec<probe::Check>,
+    /// 直连目标
+    pub target: Vec<probe::Check>,
 }
 
 impl Manager {
+    /// 按配置中的后端创建；start 时才清理残留并应用规则。
     pub fn new(store: Arc<Store>) -> Self {
-        Self::with_backend(store, Some(Builtin::new()))
+        let backend = Backend::new(&store.get().backend)
+            .unwrap_or_else(|| Backend::new(model::BACKEND_BUILTIN).unwrap());
+        Self::with_backend(store, Some(backend))
     }
 
     /// 只修改配置、不应用转发的 Manager，用于服务未运行时在命令行增删规则，
@@ -110,8 +128,9 @@ impl Manager {
         Self::with_backend(store, None)
     }
 
-    fn with_backend(store: Arc<Store>, backend: Option<Builtin>) -> Self {
+    fn with_backend(store: Arc<Store>, backend: Option<Backend>) -> Self {
         Manager {
+            stop: CancellationToken::new(),
             store,
             inner: Mutex::new(Inner {
                 backend,
@@ -125,10 +144,34 @@ impl Manager {
         &self.store
     }
 
-    /// 按配置应用规则。停机期间端口可能已被其它服务占用，与在线启用规则一样检查系统占用，冲突的规则暂不应用。
-    pub async fn start(&self) {
+    pub async fn backend_name(&self) -> &'static str {
+        self.inner
+            .lock()
+            .await
+            .backend
+            .as_ref()
+            .map_or("offline", Backend::name)
+    }
+
+    #[cfg(test)]
+    pub async fn sync_error(&self) -> String {
+        self.inner.lock().await.sync_err.clone()
+    }
+
+    /// 清理残留并按配置应用规则，之后定期维护。后端不可用时记录错误但不阻止启动，安装依赖后自动重试。
+    /// 停机期间端口可能已被其它服务占用；内核后端不绑定端口，直接应用会把发往该服务的流量转走，
+    /// 因此与在线启用规则一样检查系统占用，冲突的规则暂不应用。
+    pub async fn start(self: &Arc<Self>) {
         let mut inner = self.inner.lock().await;
         let cfg = self.store.get();
+        // 上次异常退出（如被 kill -9）时内核规则不会被清除，先清掉再按当前配置重建
+        if sysinfo::is_root() {
+            for name in [model::BACKEND_IPTABLES, model::BACKEND_NFTABLES] {
+                if let Err(e) = Backend::new(name).unwrap().cleanup().await {
+                    crate::logln!("清理残留的 {name} 转发规则失败: {e}");
+                }
+            }
+        }
         inner.blocked.clear();
         for r in cfg.rules.iter().filter(|r| r.enabled) {
             let sys: Vec<Conflict> = check_port(&cfg, &r.proto, r.listen_port, &r.id, true, &[])
@@ -141,12 +184,37 @@ impl Manager {
             }
         }
         inner.apply(&cfg.rules).await;
+        drop(inner);
+        let m = self.clone();
+        tokio::spawn(async move { m.maintain_loop().await });
     }
 
-    /// 清除所有转发。
+    async fn maintain_loop(&self) {
+        loop {
+            tokio::select! {
+                _ = self.stop.cancelled() => return,
+                _ = tokio::time::sleep(MAINTAIN_INTERVAL) => {}
+            }
+            let mut inner = self.inner.lock().await;
+            if !inner.backend.as_ref().is_some_and(Backend::is_kernel) {
+                continue;
+            }
+            if !inner.sync_err.is_empty() {
+                // 上次应用失败（如依赖刚装好、网络刚恢复），整体重试
+                inner.apply(&self.store.get().rules).await;
+            } else if let Some(Err(e)) = inner.backend.as_mut().unwrap().maintain().await {
+                crate::logln!("维护转发规则失败: {e}");
+            }
+        }
+    }
+
+    /// 停止维护并清除所有转发。
     pub async fn stop(&self) {
-        if let Some(b) = &mut self.inner.lock().await.backend {
-            b.cleanup().await;
+        self.stop.cancel();
+        if let Some(b) = &mut self.inner.lock().await.backend
+            && let Err(e) = b.cleanup().await
+        {
+            crate::logln!("清除转发规则失败: {e}");
         }
     }
 
@@ -155,7 +223,7 @@ impl Manager {
         let st = inner
             .backend
             .as_ref()
-            .map(Builtin::status)
+            .map(Backend::status)
             .unwrap_or_default();
         self.store
             .get()
@@ -207,7 +275,19 @@ impl Manager {
         Ok(())
     }
 
+    /// 内核后端需要把域名解析为非回环的 IPv4，在加锁前异步检查，避免 DNS 查询阻塞其它操作。
+    async fn check_resolvable(&self, r: &Rule) -> Result<(), String> {
+        let backend = self.store.get().backend;
+        let mut r = r.clone();
+        if model::user_space(&backend) || !r.enabled || r.validate(&backend).is_err() {
+            return Ok(());
+        }
+        let (host, _) = r.target_host_port()?;
+        kernel::resolve_host(&host, "").await.map(drop)
+    }
+
     pub async fn create(&self, mut r: Rule) -> Result<Rule, String> {
+        self.check_resolvable(&r).await?;
         r.id = config::new_id();
         r.created_at = Some(config::now());
         if r.name.trim().is_empty() {
@@ -223,6 +303,7 @@ impl Manager {
     }
 
     pub async fn update(&self, id: &str, mut r: Rule) -> Result<Rule, String> {
+        self.check_resolvable(&r).await?;
         self.mutate(id, |c, own| {
             let i = find_rule(c, id)?;
             r.id = id.to_string();
@@ -248,6 +329,61 @@ impl Manager {
     }
 }
 
+impl Manager {
+    /// 检测规则的本机监听端口与目标端口。本机检测连接本机出口 IP 而非 127.0.0.1，
+    /// 使流量经过与外部客户端相同的用户态进程 / DNAT 规则（DNAT 后源地址为回环会被内核丢弃）。
+    pub async fn probe(&self, id: &str) -> Result<ProbeResult, String> {
+        let cfg = self.store.get();
+        let r = cfg.rules[find_rule(&cfg, id)?].clone();
+        let (host, port) = r.target_host_port()?;
+        let user_space = model::user_space(&cfg.backend);
+        let target_ip = match kernel::resolve_host(&host, "").await {
+            Ok(ip) => Ok(ip),
+            // 用户态后端可转发到回环地址/域名，回环地址被 resolve_host 排除，这里直接使用原始主机名
+            Err(_) if user_space => Ok(host.clone()),
+            Err(e) => Err(e),
+        };
+        let mut local_ip = probe::local_ip(target_ip.as_deref().unwrap_or_default());
+        if local_ip.is_empty() {
+            local_ip = "127.0.0.1".into();
+        }
+        let local_addr = format!("{local_ip}:{}", r.listen_port);
+        let run = |proto: &'static str, addr: String, hold: bool| async move {
+            if proto == model::PROTO_UDP {
+                probe::udp(&addr, PROBE_TIMEOUT).await
+            } else if hold {
+                probe::tcp(&addr, PROBE_TIMEOUT, Duration::from_millis(1500)).await
+            } else {
+                probe::tcp(&addr, PROBE_TIMEOUT, Duration::ZERO).await
+            }
+        };
+        let mut local = Vec::new();
+        let mut target = Vec::new();
+        for proto in r.protos() {
+            local.push(async {
+                if r.enabled {
+                    run(proto, local_addr.clone(), user_space).await
+                } else {
+                    probe::Check::skipped(proto, &local_addr, "规则未启用")
+                }
+            });
+            let t = target_ip.clone();
+            let rt = r.target.clone();
+            target.push(async move {
+                match t {
+                    Ok(ip) => run(proto, format!("{ip}:{port}"), false).await,
+                    Err(e) => probe::Check::fail(proto, &rt, e),
+                }
+            });
+        }
+        let (local, target) = tokio::join!(
+            futures_util::future::join_all(local),
+            futures_util::future::join_all(target)
+        );
+        Ok(ProbeResult { local, target })
+    }
+}
+
 fn find_rule(c: &Config, id: &str) -> Result<usize, String> {
     c.rules
         .iter()
@@ -258,10 +394,6 @@ fn find_rule(c: &Config, id: &str) -> Result<usize, String> {
 /// 校验规则与端口冲突；停用的规则不检查系统占用。
 fn validate_rule(c: &Config, r: &mut Rule, own: &[i32]) -> Result<(), String> {
     r.validate(&c.backend)?;
-    if !model::user_space(&c.backend) && r.enabled {
-        let (host, port) = r.target_host_port()?;
-        resolve_host(&host, port)?;
-    }
     conflict_err(&check_port(
         c,
         &r.proto,
@@ -270,24 +402,6 @@ fn validate_rule(c: &Config, r: &mut Rule, own: &[i32]) -> Result<(), String> {
         r.enabled,
         own,
     ))
-}
-
-/// 内核后端需要把域名解析为非回环的 IPv4。
-fn resolve_host(host: &str, port: u16) -> Result<(), String> {
-    if host.parse::<IpAddr>().is_ok() {
-        return Ok(());
-    }
-    let addrs = (host, port)
-        .to_socket_addrs()
-        .map_err(|e| format!("解析 {host} 失败: {e}"))?;
-    let ok = addrs
-        .into_iter()
-        .any(|a| matches!(a.ip(), IpAddr::V4(v4) if !v4.is_loopback() && !v4.is_unspecified()));
-    if ok {
-        Ok(())
-    } else {
-        Err(format!("{host} 没有可用的 IPv4 地址（不能是回环地址）"))
-    }
 }
 
 /// 检查监听端口冲突。check_system 为 false 时只检查规则与面板端口。

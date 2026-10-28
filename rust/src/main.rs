@@ -1,10 +1,17 @@
+mod backend;
 mod builtin;
 mod cli;
 mod config;
 mod ctl;
+mod install;
+#[cfg(test)]
+mod integration;
+mod kernel;
 mod manager;
 mod model;
 mod portcheck;
+mod probe;
+mod realm;
 mod service;
 mod splice;
 mod sysinfo;
@@ -29,7 +36,11 @@ macro_rules! logln {
 const USAGE: &str = "lport - 端口转发管理工具 Rust 版 ({version})
 
 用法:
-  lport serve     [--config PATH] [--listen ADDR]   前台运行转发服务（目前仅 builtin 后端，暂无 Web 面板）
+  lport serve     [--config PATH] [--listen ADDR]   前台运行转发服务（暂无 Web 面板）
+  lport install   [--config PATH] [--listen ADDR] [--backend NAME] [-y]
+                                                    安装程序与系统服务（交互式；-y 或无终端时使用默认值）
+  lport uninstall [--config PATH] [--purge]         卸载系统服务，--purge 同时删除配置
+  lport start | stop | restart                      启动 / 停止 / 重启系统服务
   lport passwd    [--config PATH] [新密码]          重置管理员密码（不填则随机生成）
   lport list      [--config PATH]                   列出转发规则
   lport add       [--config PATH] [--proto tcp|udp|both] [--name NAME] [--remark TEXT] [--disabled]
@@ -38,9 +49,11 @@ const USAGE: &str = "lport - 端口转发管理工具 Rust 版 ({version})
                   [--name NAME] [--remark TEXT] [--enable|--disable]
                   规则名|ID|端口                     修改转发规则（只改指定的项）
   lport remove    [--config PATH] 规则名|ID|端口 ...  删除转发规则
+  lport probe     [--config PATH] [规则名|ID|端口 ...] 检测规则连通性（本机经转发 / 直连目标）
+  lport detect                                      检测系统环境与依赖工具
   lport version
 
-install / uninstall / start / stop / restart / probe / detect 及 Web 面板尚未移植，请使用 Go 版。
+Web 管理面板尚未移植，需要时请使用 Go 版。
 
 默认配置文件: {config}
 ";
@@ -65,8 +78,13 @@ async fn main() {
         "add" => cli::cmd_add(rest).await,
         "edit" => cli::cmd_edit(rest).await,
         "remove" | "rm" => cli::cmd_remove(rest).await,
-        "install" | "uninstall" | "start" | "stop" | "restart" | "probe" | "detect" => {
-            Err(format!("Rust 版暂未实现 {cmd}，请使用 Go 版 lport"))
+        "install" => install::cmd_install(rest),
+        "uninstall" => install::cmd_uninstall(rest),
+        "start" | "stop" | "restart" => install::cmd_service(cmd),
+        "probe" => cli::cmd_probe(rest).await,
+        "detect" => {
+            install::cmd_detect();
+            Ok(())
         }
         "version" | "-v" | "--version" => {
             println!("{VERSION}");
@@ -90,15 +108,9 @@ async fn main() {
 async fn cmd_serve(args: &[String]) -> Result<(), String> {
     let fs = Flags::parse(args, &[("config", false), ("listen", false)])?;
     if !sysinfo::is_root() {
-        logln!("警告: 当前不是 root，低端口将不可用");
+        logln!("警告: 当前不是 root，iptables/nftables 后端、低端口和软件安装将不可用");
     }
     let store = cli::load_config(fs.config(), fs.str("listen").unwrap_or_default())?;
-    let backend = store.get().backend;
-    if backend != model::BACKEND_BUILTIN {
-        return Err(format!(
-            "Rust 版目前只支持 builtin 后端，配置中为 {backend}；请改为 backend: builtin，或使用 Go 版 lport"
-        ));
-    }
     let mgr = Arc::new(Manager::new(Arc::new(store)));
     mgr.start().await;
 
@@ -113,9 +125,10 @@ async fn cmd_serve(args: &[String]) -> Result<(), String> {
         Err(e) => logln!("警告: 控制套接字启动失败，lport add/remove 将无法连接运行中的服务: {e}"),
     }
     logln!(
-        "lport {VERSION} (Rust) 已启动，转发规则 {} 条（配置: {}, 后端: builtin）；Web 面板尚未移植",
+        "lport {VERSION} (Rust) 已启动，转发规则 {} 条（配置: {}, 后端: {}）；Web 面板尚未移植",
         mgr.store().get().rules.iter().filter(|r| r.enabled).count(),
-        mgr.store().path().display()
+        mgr.store().path().display(),
+        mgr.backend_name().await
     );
 
     let mut term = signal(SignalKind::terminate()).map_err(|e| e.to_string())?;
@@ -123,7 +136,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), String> {
         _ = tokio::signal::ctrl_c() => "SIGINT",
         _ = term.recv() => "SIGTERM",
     };
-    logln!("收到信号 {name}，正在停止转发");
+    logln!("收到信号 {name}，正在停止并清理转发规则");
     mgr.stop().await;
     let _ = std::fs::remove_file(&sock);
     Ok(())

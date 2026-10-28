@@ -11,6 +11,7 @@
 #   LPORT_VERSION=v0.2.0      指定版本（默认最新版）
 #   LPORT_LISTEN=0.0.0.0:8080 管理面板监听地址（仅首次安装）
 #   LPORT_BACKEND=builtin     转发后端 builtin | realm | nftables | iptables（仅首次安装）
+#   LPORT_IMPL=go             go（默认）| rs：安装 Rust 版（内存占用更低，暂无 Web 面板，配置与 Go 版通用）
 #
 # 例: curl -fsSL .../install.sh | LPORT_LISTEN=127.0.0.1:8080 sh
 #
@@ -22,6 +23,7 @@ CONFIG="/etc/lport/config.yaml"
 LISTEN="${LPORT_LISTEN:-0.0.0.0:8080}"
 BACKEND="${LPORT_BACKEND:-builtin}"
 VERSION="${LPORT_VERSION:-}"
+IMPL="${LPORT_IMPL:-go}"
 
 if [ -t 1 ]; then
   C_BLUE='\033[1;34m' C_GREEN='\033[1;32m' C_YELLOW='\033[1;33m' C_RED='\033[1;31m' C_OFF='\033[0m'
@@ -37,6 +39,11 @@ die() {
 
 [ "$(id -u)" = 0 ] || die "请以 root 运行（例如: curl -fsSL ... | sudo sh）"
 [ "$(uname -s)" = Linux ] || die "仅支持 Linux"
+case "$IMPL" in
+  go) PREFIX=lport SUMS=sha256sums.txt ;;
+  rs) PREFIX=lport-rs SUMS=sha256sums-rs.txt ;;
+  *) die "LPORT_IMPL 必须是 go 或 rs" ;;
+esac
 for c in tar sha256sum; do
   command -v "$c" >/dev/null 2>&1 || die "缺少命令 $c"
 done
@@ -71,17 +78,17 @@ if [ -z "$VERSION" ]; then
   [ -n "$VERSION" ] || die "无法获取最新版本，可通过 LPORT_VERSION=v0.2.0 指定"
 fi
 
-PKG="lport-${VERSION}-linux-${ARCH}"
+PKG="${PREFIX}-${VERSION}-linux-${ARCH}"
 BASE="https://github.com/$REPO/releases/download/$VERSION"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
-log "下载 lport $VERSION（linux/$ARCH）"
+log "下载 $PREFIX $VERSION（linux/$ARCH）"
 fetch "$BASE/$PKG.tar.gz" "$TMP/$PKG.tar.gz" || die "下载 $PKG.tar.gz 失败"
-fetch "$BASE/sha256sums.txt" "$TMP/sha256sums.txt" || die "下载 sha256sums.txt 失败"
+fetch "$BASE/$SUMS" "$TMP/$SUMS" || die "下载 $SUMS 失败"
 
 log "校验文件完整性"
-grep " $PKG.tar.gz\$" "$TMP/sha256sums.txt" >"$TMP/sum.txt" || die "sha256sums.txt 中没有 $PKG.tar.gz"
+grep " $PKG.tar.gz\$" "$TMP/$SUMS" >"$TMP/sum.txt" || die "$SUMS 中没有 $PKG.tar.gz"
 (cd "$TMP" && sha256sum -c sum.txt >/dev/null 2>&1) || die "sha256 校验失败，文件可能已损坏"
 
 tar -xzf "$TMP/$PKG.tar.gz" -C "$TMP"
@@ -120,8 +127,13 @@ if [ "$HOST" = 0.0.0.0 ] || [ -z "$HOST" ]; then
   PUBLIC=1
 fi
 
-printf "\n${C_GREEN}lport %s 安装完成${C_OFF}\n\n" "$VERSION"
-printf "  管理面板: http://%s:%s\n" "$HOST" "$PORT"
+printf "\n${C_GREEN}%s %s 安装完成${C_OFF}\n\n" "$PREFIX" "$VERSION"
+if [ "$IMPL" = rs ]; then
+  echo "  管理面板: 无（Rust 版暂无 Web 面板，使用 lport 命令管理）"
+  PUBLIC=0
+else
+  printf "  管理面板: http://%s:%s\n" "$HOST" "$PORT"
+fi
 printf "  用户名:   %s\n" "${USERNAME:-admin}"
 if [ -n "$PASSWORD" ]; then
   printf "  密码:     ${C_YELLOW}%s${C_OFF}（随机生成，请登录后修改，或执行 lport passwd 重置）\n" "$PASSWORD"

@@ -144,16 +144,19 @@ scripts/deploy.sh -p 2222 root@host  # 指定 SSH 端口
 
 推送 `v*` tag（如 `git tag v1.0.0 && git push origin v1.0.0`）会由 GitHub Actions 自动测试、编译并发布 Release。
 
-### Rust 版（开发中）
+### Rust 版
 
-`rust/` 目录下是 Rust 重写版，与 Go 版并存、配置文件与命令行完全兼容（两个版本的 `lport list/add/edit/remove` 可以互相操作对方运行中的服务）。目前完成第一阶段：
+`rust/` 目录下是 Rust 重写版，与 Go 版并存，配置文件、命令行、systemd / OpenRC 服务文件完全兼容，可以直接互相替换；两个版本的 `lport list/add/edit/remove` 也能操作对方运行中的服务。
 
-- 已支持：`serve`（仅 builtin 后端）、`list` / `add` / `edit` / `remove` / `passwd` / `version`
-- 尚未移植：Web 面板、nftables / iptables / realm 后端、`install` / `probe` / `detect` 等，请继续使用 Go 版
+- 已支持：全部四种转发后端（nftables / iptables / realm / builtin）、域名每 60 秒重新解析、规则被外部清除后自动修复、启动时清理残留规则，以及 `install` / `uninstall` / `start` / `stop` / `restart` / `probe` / `detect` 等全部命令行功能
+- 尚未移植：Web 管理面板，需要时请使用 Go 版
+- 一键安装：`curl -fsSL .../install.sh | LPORT_IMPL=rs sh`
+- 下载 realm 时使用系统的 curl 或 wget（不内置 HTTPS 客户端，以保持二进制精简）
 
-相比 Go 版 builtin，同样的转发吞吐下内存占用明显更低（5000 条 TCP 长连接约 15 MiB，Go 版约 87 MiB；4000 个 UDP 会话约 20 MiB，Go 版约 96 MiB）。
+builtin 后端的内存占用明显低于 Go 版（5000 条 TCP 长连接约 15 MiB，Go 版约 87 MiB；4000 个 UDP 会话约 20 MiB，Go 版约 96 MiB），吞吐与延迟相当；nftables / iptables 为内核转发，两个版本性能相同。
 
 ```sh
 cd rust && cargo build --release      # 本机编译，产物 rust/target/release/lport
-scripts/build-rust.sh                 # 交叉编译全部架构（需 cargo-zigbuild），产物 release/lport-rs-*
+cd rust && cargo test                 # 单元测试；集成测试需 root，见 rust/src/integration.rs
+scripts/build-rust.sh                 # 交叉编译全部架构（需 cargo-zigbuild 与 zig），产物 release/lport-rs-*
 ```

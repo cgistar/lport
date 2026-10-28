@@ -8,12 +8,12 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::backend::RuleStatus;
 use crate::model::{self, Rule};
 use crate::splice;
 
@@ -25,34 +25,6 @@ const UDP_IDLE: Duration = Duration::from_secs(120);
 const MAX_UDP_SESSIONS: usize = 4096;
 const BUF_SIZE: usize = 64 * 1024;
 const BACKLOG: u32 = 4096;
-
-/// 规则运行状态，JSON 格式与 Go 版一致。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct RuleStatus {
-    /// running | stopped | error | applied
-    pub state: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub message: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub pids: Vec<i32>,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub restarts: i64,
-}
-
-fn is_zero(v: &i64) -> bool {
-    *v == 0
-}
-
-impl RuleStatus {
-    pub fn new(state: &str, message: impl Into<String>) -> Self {
-        RuleStatus {
-            state: state.into(),
-            message: message.into(),
-            ..Default::default()
-        }
-    }
-}
 
 #[derive(Default)]
 pub struct Builtin {

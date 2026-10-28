@@ -1,5 +1,5 @@
 # 持续集成：单元测试 + 真实内核上的集成测试（root、网络命名空间、nftables/iptables/realm/内置转发），
-# 以及 Rust 版（rust/）的格式、lint 与单元测试。
+# Go 版与 Rust 版（rust/）各一套。
 # 推送 main、提交 PR 时运行；发布流程（release.yml）也会先调用本工作流。
 name: ci
 
@@ -121,6 +121,53 @@ jobs:
             summary=$(grep -E -- '--- (PASS|FAIL)|模式' "$out" | sed -E 's/^ *//; s/ *integration_test.go:[0-9]+: //' | paste -sd ';')
             echo "::notice title=$f 集成测试::$summary"
           done
+
+      - name: 失败时输出防火墙状态
+        if: failure()
+        run: |
+          sudo nft list ruleset || true
+          sudo iptables -S || true
+          sudo iptables -t nat -S || true
+
+  rust-integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: 安装转发工具
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables iptables
+          curl -fsSL https://github.com/zhboner/realm/releases/latest/download/realm-x86_64-unknown-linux-musl.tar.gz | sudo tar -xz -C /usr/local/bin realm
+
+      # 以普通用户编译测试程序，再以 root 运行（测试需要创建网络命名空间、修改 nftables/iptables）
+      - name: 编译集成测试
+        run: |
+          bin=$(cargo test --locked --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test and .executable != null) | .executable')
+          echo "TEST_BIN=$bin" >> "$GITHUB_ENV"
+
+      - name: 集成测试
+        run: sudo "$TEST_BIN" --ignored integration --test-threads=1 --nocapture | tee "$RUNNER_TEMP/rust-it.out"
+
+      # 跳过不等于通过：任何集成测试被跳过（如缺少工具、非 root）都视为失败
+      - name: 检查测试未被跳过
+        run: |
+          out="$RUNNER_TEMP/rust-it.out"
+          if grep -q -- '--- SKIP' "$out"; then
+            echo "::error title=Rust 集成测试被跳过::$(grep -- '--- SKIP' "$out" | paste -sd ';')"
+            exit 1
+          fi
+          echo "::notice title=Rust 集成测试::$(grep -E -- '--- PASS|nftables 模式' "$out" | sed 's/^ *//' | paste -sd ';')"
 
       - name: 失败时输出防火墙状态
         if: failure()
