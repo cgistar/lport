@@ -53,7 +53,11 @@ jobs:
         with:
           targets: aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf,arm-unknown-linux-musleabihf,i686-unknown-linux-musl
 
-      - uses: mlugg/setup-zig@v2
+      # 直接安装官方 zig 包（mlugg/setup-zig 仍运行在已废弃的 Node.js 20 上），固定版本保证构建可复现
+      - name: 安装 zig
+        run: |
+          curl -fsSL https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-0.14.1" >> "$GITHUB_PATH"
 
       - uses: taiki-e/install-action@v2
         with:
