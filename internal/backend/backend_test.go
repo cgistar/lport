@@ -332,3 +332,114 @@ func TestBuiltinClientResetReleasesUpstream(t *testing.T) {
 		t.Error("上游连接未被关闭")
 	}
 }
+
+// activeConns 返回转发器上的活动连接数。
+func activeConns(f *forwarder) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.conns)
+}
+
+// 客户端先 FIN 再 RST、上游保持沉默时，代理须发现 RST 并关闭两端
+func TestBuiltinResetAfterHalfClose(t *testing.T) {
+	up, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { up.Close() })
+	checked := make(chan struct{}) // 检查完成前上游保持沉默，避免回包让代理经写入发现 RST
+	upClosed := make(chan struct{})
+	go func() {
+		c, err := up.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		io.Copy(io.Discard, c)
+		<-checked
+		// 代理已关闭上游连接时，第二次写入会因收到 RST 失败
+		for i := 0; i < 2; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if _, err := c.Write([]byte("x")); err != nil {
+				close(upClosed)
+				return
+			}
+		}
+	}()
+	lp := freePort(t)
+	b := NewBuiltin()
+	t.Cleanup(func() { _ = b.Cleanup() })
+	if err := b.Sync([]model.Rule{{ID: "r", Proto: "tcp", ListenPort: lp, Target: up.Addr().String(), Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("tcp4", "127.0.0.1:"+strconv.Itoa(lp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Write([]byte("hi"))
+	c.(*net.TCPConn).CloseWrite()
+	time.Sleep(100 * time.Millisecond)
+	c.(*net.TCPConn).SetLinger(0)
+	c.Close()
+
+	f := b.fwds["r"][0]
+	deadline := time.Now().Add(3 * time.Second)
+	for activeConns(f) > 0 {
+		if time.Now().After(deadline) {
+			close(checked)
+			t.Fatalf("FIN 后 RST 仍有 %d 个连接未释放", activeConns(f))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	close(checked)
+	select {
+	case <-upClosed:
+	case <-time.After(3 * time.Second):
+		t.Error("上游连接未被关闭")
+	}
+}
+
+// 两个方向先后正常半关闭时连接立即结束，不等待 RST 检查的轮询间隔
+func TestBuiltinBothHalfCloseFinishesPromptly(t *testing.T) {
+	up, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { up.Close() })
+	go func() {
+		c, err := up.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		io.Copy(io.Discard, c)
+		c.Write([]byte("resp"))
+		c.(*net.TCPConn).CloseWrite()
+		time.Sleep(5 * time.Second) // 不主动 Close，只半关闭
+	}()
+	lp := freePort(t)
+	b := NewBuiltin()
+	t.Cleanup(func() { _ = b.Cleanup() })
+	if err := b.Sync([]model.Rule{{ID: "r", Proto: "tcp", ListenPort: lp, Target: up.Addr().String(), Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("tcp4", "127.0.0.1:"+strconv.Itoa(lp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Write([]byte("req"))
+	c.(*net.TCPConn).CloseWrite()
+	got, err := io.ReadAll(c)
+	if string(got) != "resp" || err != nil {
+		t.Fatalf("回包 %q %v", got, err)
+	}
+	f := b.fwds["r"][0]
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for activeConns(f) > 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("两端都半关闭后 500ms 内仍有 %d 个连接未释放", activeConns(f))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

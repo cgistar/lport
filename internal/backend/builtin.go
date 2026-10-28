@@ -12,7 +12,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"lport/internal/model"
 )
@@ -288,26 +291,83 @@ func (f *forwarder) handleTCP(c net.Conn) {
 		return
 	}
 	defer f.untrack(up)
-	done := make(chan struct{})
+	cDone := make(chan struct{})  // 客户端 → 上游方向的拷贝结束
+	upDone := make(chan struct{}) // 上游 → 客户端方向的拷贝结束
+	exited := make(chan struct{})
 	go func() {
-		pipe(up, c)
-		close(done)
+		defer close(exited)
+		half := pipe(c, up)
+		close(upDone)
+		if half {
+			watchReset(up, c, cDone)
+		}
 	}()
-	pipe(c, up)
-	<-done
+	half := pipe(up, c)
+	close(cDone)
+	if half {
+		watchReset(c, up, upDone)
+	}
+	<-exited
 }
 
-// pipe 把 src 的数据拷贝到 dst。src 正常读完（对端 FIN）时半关闭 dst 的写方向，保留另一方向继续传输；
-// 出错（如对端 RST）时关闭两端，唤醒阻塞在另一方向的拷贝，否则上游不关闭时连接会一直滞留。
+// resetPoll 半关闭后检查已读完一端是否被 RST 的间隔。
+const resetPoll = time.Second
+
+// tcpStateClose Linux TCP_INFO 中的 TCP_CLOSE 状态（收到 RST 后进入）。
+const tcpStateClose = 7
+
+// watchReset 在 src 已读到 EOF（对端 FIN）、另一方向仍在传输时，定期检查 src 是否已被对端 RST。
+// 此时 src 上已没有读操作，RST 只有等另一方向有数据写入时才会被发现；对端一直沉默时两端连接会滞留。
+// 发现 RST 时关闭两端，唤醒另一方向的拷贝。other 关闭表示另一方向的拷贝已结束。
+func watchReset(src, peer net.Conn, other <-chan struct{}) {
+	t := time.NewTicker(resetPoll)
+	defer t.Stop()
+	for {
+		select {
+		case <-other:
+			return
+		case <-t.C:
+		}
+		if tcpClosed(src) {
+			_ = src.Close()
+			_ = peer.Close()
+			return
+		}
+	}
+}
+
+// tcpClosed 判断 TCP 连接是否已进入 CLOSE 状态；连接已关闭或无法查询时也返回 true。
+func tcpClosed(c net.Conn) bool {
+	sc, ok := c.(syscall.Conn)
+	if !ok {
+		return false
+	}
+	rc, err := sc.SyscallConn()
+	if err != nil {
+		return true
+	}
+	closed := false
+	if err := rc.Control(func(fd uintptr) {
+		info, err := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
+		closed = err != nil || info.State == tcpStateClose
+	}); err != nil {
+		return true
+	}
+	return closed
+}
+
+// pipe 把 src 的数据拷贝到 dst。src 正常读完（对端 FIN）时半关闭 dst 的写方向，保留另一方向继续传输，
+// 返回 true；出错（如对端 RST）时关闭两端，唤醒阻塞在另一方向的拷贝，否则上游不关闭时连接会一直滞留。
 // TCP 之间的 io.Copy 在 Linux 上走 splice，数据不经过用户态。
-func pipe(dst, src net.Conn) {
+func pipe(dst, src net.Conn) bool {
 	_, err := io.Copy(dst, src)
 	if cw, ok := dst.(interface{ CloseWrite() error }); ok && err == nil {
 		_ = cw.CloseWrite()
-		return
+		return true
 	}
 	_ = dst.Close()
 	_ = src.Close()
+	return false
 }
 
 func (f *forwarder) serveUDP() {
